@@ -114,9 +114,6 @@ def upload_sketch(sketch_path: str, fqbn: str, port: str) -> bool:
     elapsed = time.time() - start
     if result.returncode == 0:
         print(f"{GREEN}✅ Upload OK ({elapsed:.1f}s){RESET}")
-        # Automatically reset ESP32-S3 out of download mode into application execution
-        subprocess.run([sys.executable, "-m", "esptool", "--chip", "esp32s3", "--port", port, "run"],
-                       capture_output=True, text=True)
         print(f"{GREEN}🚀 Device reset & running firmware!{RESET}")
         return True
     else:
@@ -131,6 +128,8 @@ def serial_monitor(port: str, baud: int = 115200) -> None:
     try:
         import serial
         ser = serial.Serial(port, baud, timeout=0.1)
+        ser.dtr = True
+        ser.rts = True
         try:
             while True:
                 if ser.in_waiting:

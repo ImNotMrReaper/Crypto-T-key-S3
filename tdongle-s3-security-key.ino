@@ -26,7 +26,7 @@
 #include "src/duress_wipe.h"
 
 // ─── Hardware Objects ────────────────────────────────────────────────────────
-TFT_eSPI      tft = TFT_eSPI();
+TFT_eSPI*     tft = nullptr;
 RgbStatus     rgb;
 ButtonCadence btn;
 UiEngine      ui;
@@ -58,15 +58,18 @@ void resetPinEntry();
 // ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
-    delay(250); // Allow native USB CDC hardware to stabilize
+    delay(500); // Allow native USB CDC hardware to stabilize
 
     // Initialize Hardware Peripherals
     btn.begin(PIN_BTN);
     rgb.begin(PIN_LED, LED_COUNT);
-    ui.begin(&tft);
+    rgb.setMode(LED_MODE_BREATHE_CYAN);
+    rgb.update();
+
+    tft = new TFT_eSPI();
+    ui.begin(tft);
 
     // Boot Splash & Visual Self-Test (1.2 seconds)
-    rgb.setMode(LED_MODE_BREATHE_CYAN);
     ui.renderBootSplash();
     for (int i = 0; i < 60; i++) {
         rgb.update();
@@ -86,6 +89,7 @@ void setup() {
     Serial.println("Controls: TAP = +1 | HOLD 1s = OK | HOLD 2.5s = BACK");
     Serial.println("Emergency Duress PIN: 9999 (Flash zeroize + decoy halt)");
     Serial.println("Type 'help' in serial monitor for interactive commands.\n");
+    Serial.flush();
 }
 
 // ─── Main Loop ───────────────────────────────────────────────────────────────
@@ -98,7 +102,7 @@ void loop() {
     // 2. Global Panic Hold Check (> 6 seconds hold)
     if (ev == BTN_PANIC_HOLD) {
         Serial.println("[EMERGENCY] Physical panic hold detected!");
-        DuressWipe::execute(tft, rgb, "PANIC_HOLD");
+        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
         return;
     }
 
@@ -169,7 +173,7 @@ void processLockedState(ButtonEvent ev) {
 
             if (strcmp(pinDigits, EMERGENCY_DURESS_PIN) == 0) {
                 // Emergency Duress PIN triggered!
-                DuressWipe::execute(tft, rgb, "DURESS_PIN");
+                DuressWipe::execute(*tft, rgb, "DURESS_PIN");
             } else if (strcmp(pinDigits, DEFAULT_MASTER_PIN) == 0) {
                 // Unlock Success!
                 Serial.println("[VAULT] Master PIN Accepted! Device Unlocked.");
@@ -373,7 +377,7 @@ void handleSerialCommands() {
     }
     else if (cmd == "duress") {
         Serial.println("[SECURITY] Triggering DURESS wipe from console!");
-        DuressWipe::execute(tft, rgb, "SERIAL_DURESS");
+        DuressWipe::execute(*tft, rgb, "SERIAL_DURESS");
     }
     else if (cmd == "status") {
         Serial.printf("[STATUS] Device State: %d, Uptime: %lus\n", deviceState, millis() / 1000);
