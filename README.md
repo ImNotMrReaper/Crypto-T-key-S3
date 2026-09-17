@@ -39,10 +39,10 @@ This firmware turns the **LilyGo T-Dongle S3** into an all-in-one personal hardw
 
 | Gesture | Timing | Action |
 | :--- | :--- | :--- |
-| **Short Press** | `< 750ms` | Increment PIN digit (0-9) / Next option |
-| **Long Press** | `> 750ms` | Confirm digit / Approve transaction / Lock device |
-| **Double Click** | `< 320ms interval` | Backspace / Reject request / Cancel |
-| **Panic Hold** | `> 6000ms` | **Instant Flash Zeroization & Decoy Crash** |
+| **Short Press (Tap)** | `< 650ms` | Increment PIN digit (`+1`) / Next option (Instant on release) |
+| **Long Press (Hold)** | `650ms – 2200ms` | Confirm digit / Commit transaction / OK |
+| **Very Long Press (Hold)** | `2200ms – 5500ms` | Backspace / Lock device / Cancel / Reject |
+| **Panic Hold** | `> 5500ms` | **Instant Flash Zeroization & Decoy Crash** |
 
 ---
 

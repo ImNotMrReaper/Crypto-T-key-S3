@@ -10,9 +10,9 @@ void UiEngine::begin(TFT_eSPI* tft) {
     _tft->setRotation(DISP_ROTATION);
     _tft->fillScreen(TFT_BLACK);
 
-    // Turn on backlight GPIO 38
+    // Turn on backlight GPIO 38 (Active LOW)
     pinMode(PIN_TFT_BL, OUTPUT);
-    digitalWrite(PIN_TFT_BL, HIGH);
+    digitalWrite(PIN_TFT_BL, TFT_BL_ON);
 }
 
 void UiEngine::drawHeader(const char* title, uint16_t headerColor) {
@@ -21,6 +21,22 @@ void UiEngine::drawHeader(const char* title, uint16_t headerColor) {
     _tft->setTextFont(1);
     _tft->setTextSize(1);
     _tft->drawString(title, 4, 3);
+}
+
+void UiEngine::renderBootSplash() {
+    _tft->fillScreen(TFT_BLACK);
+    drawHeader("ANTIGRAVITY // T-KEY S3", TFT_NAVY);
+
+    _tft->setTextColor(TFT_WHITE, TFT_BLACK);
+    _tft->drawString("HARDWARE SECURITY KEY", 6, 20, 1);
+
+    _tft->setTextColor(TFT_GREEN, TFT_BLACK);
+    _tft->drawString("SYSTEM : ESP32-S3 @ 240MHz", 6, 34, 1);
+    _tft->drawString("CRYPTO : AES-XTS / WebAuthn", 6, 46, 1);
+
+    _tft->fillRect(0, 64, DISP_W, 16, 0x1144);
+    _tft->setTextColor(TFT_YELLOW, 0x1144);
+    _tft->drawString("INITIALIZING VAULT...", 16, 68, 1);
 }
 
 void UiEngine::renderPinScreen(const char* currentDigits, int activeIndex, int currentVal) {
@@ -59,7 +75,7 @@ void UiEngine::renderPinScreen(const char* currentDigits, int activeIndex, int c
     // Controls hint bar at bottom
     _tft->fillRect(0, 66, DISP_W, 14, TFT_BLACK);
     _tft->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    _tft->drawString("TAP:+1 | HOLD:OK | 2x:DEL", 8, 68, 1);
+    _tft->drawString("TAP:+1 | HOLD:OK | LONG:DEL", 6, 68, 1);
 }
 
 void UiEngine::renderDashboard(uint32_t uptimeSec, bool fidoReady, bool cryptoReady) {

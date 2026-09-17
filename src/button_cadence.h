@@ -22,8 +22,7 @@ private:
     bool     _stableState = HIGH;
     uint32_t _lastDebounceTime = 0;
     uint32_t _pressStartTime = 0;
-    uint32_t _lastReleaseTime = 0;
-    int      _clickCount = 0;
     bool     _longReported = false;
+    bool     _veryLongReported = false;
     bool     _panicReported = false;
 };

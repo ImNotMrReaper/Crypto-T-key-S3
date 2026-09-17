@@ -16,6 +16,7 @@ public:
     void begin(TFT_eSPI* tft);
 
     // View Renders
+    void renderBootSplash();
     void renderPinScreen(const char* currentDigits, int activeIndex, int currentVal);
     void renderDashboard(uint32_t uptimeSec, bool fidoReady, bool cryptoReady);
     void renderFidoRequest(const char* originDomain);

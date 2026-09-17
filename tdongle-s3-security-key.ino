@@ -58,13 +58,22 @@ void resetPinEntry();
 // ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
+    delay(250); // Allow native USB CDC hardware to stabilize
 
-    // Initialize Hardware
+    // Initialize Hardware Peripherals
     btn.begin(PIN_BTN);
     rgb.begin(PIN_LED, LED_COUNT);
     ui.begin(&tft);
 
-    // Initial state: Locked awaiting PIN
+    // Boot Splash & Visual Self-Test (1.2 seconds)
+    rgb.setMode(LED_MODE_BREATHE_CYAN);
+    ui.renderBootSplash();
+    for (int i = 0; i < 60; i++) {
+        rgb.update();
+        delay(20);
+    }
+
+    // Initial state: Locked awaiting Master PIN
     deviceState = STATE_LOCKED;
     resetPinEntry();
     rgb.setMode(LED_MODE_SOLID_AMBER);
@@ -74,6 +83,7 @@ void setup() {
     Serial.println(" ⚡ T-DONGLE-S3 SECURITY KEY & CRYPTO VAULT INITIALIZED");
     Serial.println("========================================================");
     Serial.println("Status: LOCKED. Enter PIN via button cadence (Default: 1234)");
+    Serial.println("Controls: TAP = +1 | HOLD 1s = OK | HOLD 2.5s = BACK");
     Serial.println("Emergency Duress PIN: 9999 (Flash zeroize + decoy halt)");
     Serial.println("Type 'help' in serial monitor for interactive commands.\n");
 }
@@ -183,7 +193,7 @@ void processLockedState(ButtonEvent ev) {
             }
         }
     } 
-    else if (ev == BTN_DOUBLE_CLICK) {
+    else if (ev == BTN_VERY_LONG_PRESS) {
         // Backspace
         if (pinIndex > 0) {
             pinIndex--;
@@ -202,15 +212,15 @@ void processDashboardState(ButtonEvent ev) {
         ui.renderDashboard(millis() / 1000, true, true);
     }
 
-    if (ev == BTN_LONG_PRESS) {
-        // Lock device
+    if (ev == BTN_VERY_LONG_PRESS) {
+        // Lock device (Hold > 2.2s)
         Serial.println("[VAULT] Device Locked by user.");
         deviceState = STATE_LOCKED;
         resetPinEntry();
         rgb.setMode(LED_MODE_SOLID_AMBER);
         ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal);
-    } else if (ev == BTN_DOUBLE_CLICK) {
-        // Toggle view demo: Air-Gap SD
+    } else if (ev == BTN_SHORT_PRESS) {
+        // Tap to cycle view demo: Air-Gap SD
         Serial.println("[MODE] Switched to Air-Gap SD check.");
         deviceState = STATE_AIRGAP_SD;
         rgb.setMode(LED_MODE_SOLID_BLUE);
@@ -230,7 +240,7 @@ void processFidoState(ButtonEvent ev) {
         deviceState = STATE_IDLE_DASHBOARD;
         rgb.setMode(LED_MODE_BREATHE_CYAN);
         ui.renderDashboard(millis() / 1000, true, true);
-    } else if (ev == BTN_DOUBLE_CLICK) {
+    } else if (ev == BTN_VERY_LONG_PRESS) {
         // Rejected
         Serial.println("[FIDO2] ❌ Authentication Rejected by user.");
         ui.renderErrorBanner("Auth Cancelled");
@@ -254,7 +264,7 @@ void processCryptoState(ButtonEvent ev) {
         deviceState = STATE_IDLE_DASHBOARD;
         rgb.setMode(LED_MODE_BREATHE_CYAN);
         ui.renderDashboard(millis() / 1000, true, true);
-    } else if (ev == BTN_DOUBLE_CLICK) {
+    } else if (ev == BTN_VERY_LONG_PRESS) {
         // Rejected
         Serial.println("[SIGNER] ❌ Transaction Rejected by user.");
         ui.renderErrorBanner("Tx Aborted");
@@ -277,7 +287,7 @@ void processAirGapState(ButtonEvent ev) {
         deviceState = STATE_IDLE_DASHBOARD;
         rgb.setMode(LED_MODE_BREATHE_CYAN);
         ui.renderDashboard(millis() / 1000, true, true);
-    } else if (ev == BTN_DOUBLE_CLICK) {
+    } else if (ev == BTN_VERY_LONG_PRESS) {
         deviceState = STATE_IDLE_DASHBOARD;
         rgb.setMode(LED_MODE_BREATHE_CYAN);
         ui.renderDashboard(millis() / 1000, true, true);
@@ -286,7 +296,7 @@ void processAirGapState(ButtonEvent ev) {
 
 // ─── State: BLE Phone Companion ─────────────────────────────────────────────
 void processBleState(ButtonEvent ev) {
-    if (ev == BTN_DOUBLE_CLICK) {
+    if (ev == BTN_VERY_LONG_PRESS || ev == BTN_SHORT_PRESS) {
         deviceState = STATE_IDLE_DASHBOARD;
         rgb.setMode(LED_MODE_BREATHE_CYAN);
         ui.renderDashboard(millis() / 1000, true, true);

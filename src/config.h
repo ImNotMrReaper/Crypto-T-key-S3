@@ -9,7 +9,9 @@
 #include <Arduino.h>
 
 // ─── Hardware Pin Definitions ────────────────────────────────────────────────
-#define PIN_TFT_BL        38      // TFT backlight (active HIGH)
+#define PIN_TFT_BL        38      // TFT backlight (active LOW on LilyGo T-Dongle S3)
+#define TFT_BL_ON         LOW
+#define TFT_BL_OFF        HIGH
 #define PIN_LED           40      // WS2812B data line
 #define PIN_BTN           0       // BOOT button (active LOW, internal pullup)
 #define LED_COUNT         1       // Single WS2812 RGB LED
@@ -25,10 +27,10 @@
 #define DISP_ROTATION     1       // Landscape mode (160x80)
 
 // ─── Button Cadence Timings (ms) ─────────────────────────────────────────────
-#define BTN_DEBOUNCE_MS        40
-#define BTN_DOUBLE_CLICK_MS    320     // Max interval between 2 clicks
-#define BTN_LONG_PRESS_MS      750     // Hold > 750ms = Long Press (Confirm/Enter)
-#define BTN_PANIC_HOLD_MS     6000     // Hold > 6000ms = Emergency Duress Wipe
+#define BTN_DEBOUNCE_MS        35
+#define BTN_LONG_PRESS_MS      650     // Hold > 650ms = Confirm / OK
+#define BTN_VERY_LONG_MS      2200     // Hold > 2200ms = Backspace / Cancel
+#define BTN_PANIC_HOLD_MS     5500     // Hold > 5500ms = Emergency Duress Wipe
 
 // ─── Security & PIN Settings ─────────────────────────────────────────────────
 #define PIN_LENGTH             4
@@ -37,6 +39,7 @@
 
 // ─── Operating States ────────────────────────────────────────────────────────
 enum DeviceState {
+    STATE_BOOT_SPLASH,         // Boot splash & self-test
     STATE_LOCKED,              // Awaiting PIN entry (Amber LED)
     STATE_IDLE_DASHBOARD,      // Authenticated & ready (Breathing Cyan LED)
     STATE_FIDO_AUTH_REQUEST,   // WebAuthn / Passkey user presence requested (Pulsing Green LED)
@@ -49,8 +52,8 @@ enum DeviceState {
 // ─── Button Events ───────────────────────────────────────────────────────────
 enum ButtonEvent {
     BTN_NONE,
-    BTN_SHORT_PRESS,    // Increment digit / Next field (<750ms)
-    BTN_LONG_PRESS,     // Confirm digit / Enter (>750ms)
-    BTN_DOUBLE_CLICK,   // Cancel / Backspace (<320ms double click)
-    BTN_PANIC_HOLD      // Hardware emergency wipe held (>6000ms)
+    BTN_SHORT_PRESS,       // Instant on release (<650ms): +1 / Next
+    BTN_LONG_PRESS,        // Triggered at 650ms: Confirm / Enter / Commit
+    BTN_VERY_LONG_PRESS,   // Triggered at 2200ms: Backspace / Back / Reject
+    BTN_PANIC_HOLD         // Triggered at 5500ms: Emergency Hardware Zeroization
 };

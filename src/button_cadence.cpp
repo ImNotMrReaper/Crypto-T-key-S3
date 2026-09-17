@@ -10,9 +10,8 @@ void ButtonCadence::begin(uint8_t pin) {
     _lastRawState = digitalRead(_pin);
     _stableState = _lastRawState;
     _pressStartTime = 0;
-    _lastReleaseTime = 0;
-    _clickCount = 0;
     _longReported = false;
+    _veryLongReported = false;
     _panicReported = false;
 }
 
@@ -42,43 +41,30 @@ ButtonEvent ButtonCadence::update() {
                 // Button Pressed Down
                 _pressStartTime = now;
                 _longReported = false;
+                _veryLongReported = false;
                 _panicReported = false;
             } else {
-                // Button Released Up
+                // Button Released Up — Check if it was a short tap!
                 uint32_t duration = now - _pressStartTime;
-                _lastReleaseTime = now;
-
-                if (!_longReported && !_panicReported) {
-                    _clickCount++;
+                if (!_longReported && !_veryLongReported && !_panicReported && duration >= BTN_DEBOUNCE_MS) {
+                    event = BTN_SHORT_PRESS;
                 }
             }
         }
     }
 
-    // Check for active hold conditions while button is held DOWN
+    // Check for active hold thresholds while button is held DOWN
     if (_stableState == LOW) {
         uint32_t holdTime = now - _pressStartTime;
         if (holdTime >= BTN_PANIC_HOLD_MS && !_panicReported) {
             _panicReported = true;
-            _longReported = true;
-            _clickCount = 0;
             return BTN_PANIC_HOLD;
-        } else if (holdTime >= BTN_LONG_PRESS_MS && !_longReported && !_panicReported) {
+        } else if (holdTime >= BTN_VERY_LONG_MS && !_veryLongReported && !_panicReported) {
+            _veryLongReported = true;
+            return BTN_VERY_LONG_PRESS;
+        } else if (holdTime >= BTN_LONG_PRESS_MS && !_longReported && !_veryLongReported && !_panicReported) {
             _longReported = true;
-            _clickCount = 0;
             return BTN_LONG_PRESS;
-        }
-    }
-
-    // Check clicks when button is UP
-    if (_stableState == HIGH && _clickCount > 0) {
-        if (_clickCount >= 2) {
-            _clickCount = 0;
-            return BTN_DOUBLE_CLICK;
-        }
-        if ((now - _lastReleaseTime) > BTN_DOUBLE_CLICK_MS) {
-            _clickCount = 0;
-            return BTN_SHORT_PRESS;
         }
     }
 
