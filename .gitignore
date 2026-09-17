@@ -1,0 +1,16 @@
+# Compiled binaries and build artifacts
+build/
+*.bin
+*.elf
+*.hex
+*.o
+*.a
+*.so
+
+# Editor & IDE artifacts
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+.theia/
