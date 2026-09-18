@@ -39,7 +39,7 @@ void UiEngine::renderBootSplash() {
     _tft->drawString("INITIALIZING VAULT...", 16, 68, 1);
 }
 
-void UiEngine::renderPinScreen(const char* currentDigits, int activeIndex, int currentVal) {
+void UiEngine::renderPinScreen(const char* currentDigits, int activeIndex, int currentVal, uint8_t holdStage) {
     _tft->fillScreen(TFT_BLACK);
     drawHeader("AUTHENTICATION // PIN", TFT_MAROON);
 
@@ -72,35 +72,53 @@ void UiEngine::renderPinScreen(const char* currentDigits, int activeIndex, int c
         }
     }
 
-    // Controls hint bar at bottom
-    _tft->fillRect(0, 66, DISP_W, 14, TFT_BLACK);
-    _tft->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    _tft->drawString("TAP:+1 | HOLD:OK | LONG:DEL", 6, 68, 1);
+    // Dynamic Controls & Hold Stage Feedback Bar
+    if (holdStage == 1) {
+        _tft->fillRect(0, 64, DISP_W, 16, 0x03E0); // Forest green
+        _tft->setTextColor(TFT_WHITE, 0x03E0);
+        _tft->drawString("[ RELEASE: CONFIRM ]", 14, 68, 1);
+    } else if (holdStage == 2) {
+        _tft->fillRect(0, 64, DISP_W, 16, TFT_MAGENTA);
+        _tft->setTextColor(TFT_WHITE, TFT_MAGENTA);
+        _tft->drawString("[ RELEASE: RESET ALL ]", 10, 68, 1);
+    } else if (holdStage == 3) {
+        _tft->fillRect(0, 64, DISP_W, 16, TFT_RED);
+        _tft->setTextColor(TFT_WHITE, TFT_RED);
+        _tft->drawString("! DURESS WIPE IMMINENT !", 8, 68, 1);
+    } else {
+        _tft->fillRect(0, 66, DISP_W, 14, TFT_BLACK);
+        _tft->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+        _tft->drawString("TAP:+1 | 2x:DEL | HOLD:OK", 6, 68, 1);
+    }
 }
 
-void UiEngine::renderDashboard(uint32_t uptimeSec, bool fidoReady, bool cryptoReady) {
+void UiEngine::renderDashboard(uint32_t uptimeSec, bool fidoReady, bool cryptoReady, bool wifiConnected, const char* ipStr) {
     _tft->fillScreen(TFT_BLACK);
     drawHeader("T-KEY S3 // VAULT READY", 0x1144); // Dark cyan/blue
 
     // Status lines
     _tft->setTextColor(TFT_WHITE, TFT_BLACK);
-    _tft->drawString("USB : Composite (HID+CDC)", 4, 18, 1);
+    _tft->drawString("USB    : HID + CDC Active", 4, 17, 1);
 
     _tft->setTextColor(TFT_GREEN, TFT_BLACK);
-    _tft->drawString("FIDO2  : Active (WebAuthn)", 4, 30, 1);
+    _tft->drawString("FIDO2  : WebAuthn Passkey", 4, 28, 1);
 
     _tft->setTextColor(TFT_YELLOW, TFT_BLACK);
-    _tft->drawString("SIGNER : Clear-Sign Active", 4, 42, 1);
+    _tft->drawString("WALLET : BTC/ETH/SOL Ready", 4, 39, 1);
 
-    _tft->setTextColor(TFT_CYAN, TFT_BLACK);
-    _tft->drawString("STORAGE: AES-XTS Encrypted", 4, 54, 1);
+    _tft->setTextColor(wifiConnected ? TFT_GREEN : TFT_DARKGREY, TFT_BLACK);
+    char wifiBuf[32];
+    if (wifiConnected && ipStr) {
+        snprintf(wifiBuf, sizeof(wifiBuf), "WIFI   : %s", ipStr);
+    } else {
+        snprintf(wifiBuf, sizeof(wifiBuf), "WIFI   : Auto-Scan Ready");
+    }
+    _tft->drawString(wifiBuf, 4, 50, 1);
 
     // Footer
-    _tft->fillRect(0, 68, DISP_W, 12, 0x2104);
+    _tft->fillRect(0, 66, DISP_W, 14, 0x2104);
     _tft->setTextColor(TFT_WHITE, 0x2104);
-    char buf[32];
-    snprintf(buf, sizeof(buf), "Uptime: %lus | HOLD to Lock", (unsigned long)uptimeSec);
-    _tft->drawString(buf, 4, 70, 1);
+    _tft->drawString("TAP:Menu | HOLD:Lock", 18, 69, 1);
 }
 
 void UiEngine::renderFidoRequest(const char* originDomain) {
@@ -200,4 +218,124 @@ void UiEngine::renderErrorBanner(const char* message) {
 
     _tft->setTextColor(TFT_YELLOW, 0x8000);
     _tft->drawString(message, 20, 44, 1);
+}
+
+void UiEngine::renderWalletScreen(const char* coinName, const char* symbol, const char* path, const char* address) {
+    _tft->fillScreen(TFT_BLACK);
+    char hdr[32];
+    snprintf(hdr, sizeof(hdr), "VAULT // %s", symbol ? symbol : "CRYPTO");
+    drawHeader(hdr, 0x9000); // Dark orange/gold
+
+    _tft->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    _tft->drawString("COIN:", 4, 17, 1);
+    _tft->setTextColor(TFT_CYAN, TFT_BLACK);
+    _tft->drawString(coinName, 36, 17, 1);
+
+    _tft->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    _tft->drawString("PATH:", 4, 29, 1);
+    _tft->setTextColor(TFT_YELLOW, TFT_BLACK);
+    _tft->drawString(path, 36, 29, 1);
+
+    _tft->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    _tft->drawString("ADDR:", 4, 42, 1);
+
+    // Address card
+    _tft->fillRect(4, 52, DISP_W - 8, 14, 0x18C3);
+    _tft->setTextColor(TFT_GREEN, 0x18C3);
+    _tft->drawString(address, 8, 55, 1);
+
+    // Footer
+    _tft->fillRect(0, 68, DISP_W, 12, 0x3186);
+    _tft->setTextColor(TFT_WHITE, 0x3186);
+    _tft->drawString("TAP:Next Coin | 2x:Back", 14, 70, 1);
+}
+
+void UiEngine::renderWifiScreen(bool connected, const char* ssid, const char* ip, int8_t rssi, int savedCount) {
+    _tft->fillScreen(TFT_BLACK);
+    drawHeader("WI-FI NETWORK ENGINE", 0x028A); // Blue-green
+
+    _tft->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    _tft->drawString("STATE :", 4, 18, 1);
+    if (connected) {
+        _tft->setTextColor(TFT_GREEN, TFT_BLACK);
+        _tft->drawString("CONNECTED", 48, 18, 1);
+    } else {
+        _tft->setTextColor(TFT_RED, TFT_BLACK);
+        _tft->drawString("SEARCHING / IDLE", 48, 18, 1);
+    }
+
+    _tft->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    _tft->drawString("SSID  :", 4, 30, 1);
+    _tft->setTextColor(TFT_CYAN, TFT_BLACK);
+    _tft->drawString(ssid ? ssid : "None", 48, 30, 1);
+
+    _tft->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    _tft->drawString("IP    :", 4, 42, 1);
+    _tft->setTextColor(TFT_YELLOW, TFT_BLACK);
+    _tft->drawString(ip ? ip : "0.0.0.0", 48, 42, 1);
+
+    _tft->setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    _tft->drawString("SAVED :", 4, 54, 1);
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%d network profile(s)", savedCount);
+    _tft->setTextColor(TFT_WHITE, TFT_BLACK);
+    _tft->drawString(buf, 48, 54, 1);
+
+    // Footer
+    _tft->fillRect(0, 68, DISP_W, 12, 0x1104);
+    _tft->setTextColor(TFT_WHITE, 0x1104);
+    _tft->drawString("TAP:Scan/Connect | 2x:Back", 10, 70, 1);
+}
+
+void UiEngine::renderCryptoPrices(float btc, float eth, float sol, float doge, bool isLive) {
+    _tft->fillScreen(TFT_BLACK);
+    drawHeader(isLive ? "LIVE CRYPTO PRICES (USD)" : "PRICES (OFFLINE CACHE)", isLive ? 0x03E0 : 0x4208);
+
+    char btcBuf[24], ethBuf[24], solBuf[24], dogeBuf[24];
+    snprintf(btcBuf, sizeof(btcBuf), "BTC : $%0.0f", btc);
+    snprintf(ethBuf, sizeof(ethBuf), "ETH : $%0.0f", eth);
+    snprintf(solBuf, sizeof(solBuf), "SOL : $%0.2f", sol);
+    snprintf(dogeBuf, sizeof(dogeBuf), "DOGE: $%0.3f", doge);
+
+    _tft->setTextColor(TFT_YELLOW, TFT_BLACK);
+    _tft->drawString(btcBuf, 6, 17, 1);
+
+    _tft->setTextColor(TFT_CYAN, TFT_BLACK);
+    _tft->drawString(ethBuf, 84, 17, 1);
+
+    _tft->setTextColor(TFT_PURPLE, TFT_BLACK);
+    _tft->drawString(solBuf, 6, 33, 1);
+
+    _tft->setTextColor(TFT_GOLD, TFT_BLACK);
+    _tft->drawString(dogeBuf, 84, 33, 1);
+
+    _tft->fillRect(4, 48, DISP_W - 8, 16, 0x10C2);
+    _tft->setTextColor(isLive ? TFT_GREEN : TFT_ORANGE, 0x10C2);
+    _tft->drawString(isLive ? "FEED: CoinGecko API" : "FEED: Awaiting Wi-Fi Sync", 8, 52, 1);
+
+    // Footer
+    _tft->fillRect(0, 68, DISP_W, 12, 0x2125);
+    _tft->setTextColor(TFT_WHITE, 0x2125);
+    _tft->drawString("TAP:Refresh | 2x:Back", 16, 70, 1);
+}
+
+void UiEngine::renderSetupStep(uint8_t step, const char* title, const char* line1, const char* line2, const char* line3, const char* hint) {
+    _tft->fillScreen(TFT_BLACK);
+    char hdr[32];
+    snprintf(hdr, sizeof(hdr), "SETUP [%d/4] // %s", step, title);
+    drawHeader(hdr, 0x5800); // Amber-red
+
+    _tft->setTextColor(TFT_WHITE, TFT_BLACK);
+    if (line1) _tft->drawString(line1, 6, 18, 1);
+
+    _tft->setTextColor(TFT_CYAN, TFT_BLACK);
+    if (line2) _tft->drawString(line2, 6, 32, 1);
+
+    _tft->setTextColor(TFT_YELLOW, TFT_BLACK);
+    if (line3) _tft->drawString(line3, 6, 46, 1);
+
+    // Footer hint
+    _tft->fillRect(0, 66, DISP_W, 14, 0x18C3);
+    _tft->setTextColor(TFT_GREEN, 0x18C3);
+    _tft->drawString(hint ? hint : "TAP: Continue", 8, 68, 1);
 }
