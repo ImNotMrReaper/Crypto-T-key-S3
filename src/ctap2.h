@@ -38,8 +38,9 @@ public:
     Ctap2Engine();
     void begin();
 
-    // Main entry point from CTAPHID
+    // Main entry points from CTAPHID
     void handleCborRequest(uint32_t cid, const uint8_t* req, uint16_t reqLen);
+    void handleCtap1Msg(uint32_t cid, const uint8_t* req, uint16_t reqLen);
 
     // Callbacks to UI and Button verification
     typedef bool (*UserPresencePrompt)(uint32_t cid, const char* rpId, bool isRegistration);

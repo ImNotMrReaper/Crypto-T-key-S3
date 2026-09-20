@@ -360,7 +360,52 @@ void UiEngine::renderAirGapScreen(const char* psbtFile, const char* summary, boo
     _sprite->setTextColor(readyToSign ? COLOR_SIGNAL_GREEN : COLOR_CYBER_GOLD, COLOR_BG);
     _sprite->drawString(summary, DISP_W / 2, 44, 2);
 
-    drawFooter(readyToSign ? "[●] HOLD: SIGN PSBT" : "NO PSBT DETECTED", 0, 0.0f);
+    drawFooter(readyToSign ? "[●] HOLD: SIGN PSBT" : "[▲] DBL: EXIT", 0, 0.0f);
+
+    _sprite->pushSprite(0, 0);
+}
+
+void UiEngine::renderAirGapPsbt(const char* fileName, const char* recipient, const char* amountBtc, const char* feeStr, bool readyToSign) {
+    if (!_sprite) return;
+    _sprite->fillSprite(COLOR_BG);
+
+    drawHeader("BIP-174 PSBT SIGNER", 0x0010, 0x541F);
+
+    // File name tag
+    _sprite->setTextDatum(TL_DATUM);
+    _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
+    _sprite->drawString(fileName, 6, 16, 1);
+
+    // Recipient Card (Y: 26..51)
+    _sprite->fillRoundRect(4, 26, DISP_W - 8, 26, 3, 0x0842);
+    _sprite->fillRoundRect(4, 26, 3, 26, 1, 0x541F); // Sapphire blue accent
+
+    _sprite->setTextColor(0xFFFF, 0x0842);
+    size_t addrLen = recipient ? strlen(recipient) : 0;
+    if (addrLen <= 22) {
+        _sprite->drawString(recipient ? recipient : "No Recipient", 10, 34, 1);
+    } else {
+        char line1[24], line2[28];
+        size_t split = (addrLen > 21) ? 21 : addrLen;
+        strncpy(line1, recipient, split);
+        line1[split] = '\0';
+        strncpy(line2, recipient + split, sizeof(line2) - 1);
+        line2[sizeof(line2) - 1] = '\0';
+        _sprite->drawString(line1, 10, 29, 1);
+        _sprite->setTextColor(0xDEFB, 0x0842);
+        _sprite->drawString(line2, 10, 39, 1);
+    }
+
+    // Amount & Fee Row (Y: 53..65)
+    _sprite->setTextDatum(TL_DATUM);
+    _sprite->setTextColor(COLOR_SIGNAL_GREEN, COLOR_BG);
+    _sprite->drawString(amountBtc, 6, 54, 1);
+
+    _sprite->setTextDatum(TR_DATUM);
+    _sprite->setTextColor(COLOR_CYBER_GOLD, COLOR_BG);
+    _sprite->drawString(feeStr, 154, 54, 1);
+
+    drawFooter(readyToSign ? "[●] HOLD: SIGN & EXPORT" : "CANNOT SIGN", 0, 0.0f);
 
     _sprite->pushSprite(0, 0);
 }

@@ -41,6 +41,7 @@ __attribute__((constructor(101))) void pre_init_early() {
 #include "src/portfolio_mgr.h"
 #include "src/wifi_manager.h"
 #include "src/web_portal.h"
+#include "src/psbt_signer.h"
 
 // ─── Subsystem Allocations (Dynamic Initialization) ──────────────────────────
 TFT_eSPI*     tft    = nullptr;
@@ -68,6 +69,11 @@ char          mnemonicWords[24][16];
 int           totalMnemonicWords = 12;
 int           currentWordIdx = 0;
 
+// Air-Gap PSBT Signer State
+char          psbtFilePath[64] = "";
+PsbtTxDetails currentPsbt;
+bool          psbtLoaded = false;
+
 // Temporary buffers for active requests
 char reqDomain[48]     = "webauthn.io";
 char reqChain[24]      = "Bitcoin Mainnet";
@@ -82,6 +88,8 @@ void processVaultDashboardState(ButtonEvent ev);
 void processPortfolioTrackerState(ButtonEvent ev);
 void processSeedEntropyState(ButtonEvent ev);
 void processSeedWordDisplayState(ButtonEvent ev);
+void processAirGapSdSignState(ButtonEvent ev);
+void scanAndRenderAirGapPsbt();
 void resetPinEntry();
 void loadSecurityConfig();
 bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistration);
@@ -126,6 +134,15 @@ void setup() {
     ctapHid.begin();
     ctap2Engine.begin();
     ctap2Engine.setUserPresencePrompt(handleUserPresencePrompt);
+    ctapHid.setWinkHandler([](uint32_t cid) {
+        Serial.printf("[FIDO2] 😉 WINK identification triggered on CID 0x%08X!\n", cid);
+        rgb.flashRainbow(1500);
+        if (deviceState == STATE_IDLE_READY) {
+            ui.renderSuccessBanner("DEVICE LOCATED", "WINK VERIFIED");
+            delay(800);
+            ui.renderReadyDashboard(millis() / 1000, true, wallet && wallet->isUnlocked());
+        }
+    });
 
     // 6. Portfolio & Seed Engines
     PortfolioManager::init();
@@ -217,6 +234,9 @@ void loop() {
             break;
         case STATE_SEED_WORD_DISPLAY:
             processSeedWordDisplayState(ev);
+            break;
+        case STATE_AIRGAP_SD_SIGN:
+            processAirGapSdSignState(ev);
             break;
         case STATE_DURESS_WIPED:
             delay(100);
@@ -392,6 +412,10 @@ void processVaultDashboardState(ButtonEvent ev) {
         rgb.flashTap(cr, cg, cb, 60);
         rgb.setCoinColor(cr, cg, cb);
         ui.renderWalletScreen(name, sym, acc ? acc->address : "", acc ? acc->derivationPath : "");
+    } else if (ev == BTN_DOUBLE_CLICK) {
+        // Double click launches the Air-Gap MicroSD PSBT Signer!
+        deviceState = STATE_AIRGAP_SD_SIGN;
+        scanAndRenderAirGapPsbt();
     } else if (ev == BTN_LONG_PRESS || ev == BTN_VERY_LONG_PRESS) {
         wallet->lock();
         deviceState = STATE_IDLE_READY;
@@ -475,6 +499,83 @@ void processSeedWordDisplayState(ButtonEvent ev) {
         deviceState = STATE_IDLE_READY;
         rgb.setMode(LED_MODE_BREATHE_CYAN);
         ui.renderReadyDashboard(millis() / 1000, true, true);
+    }
+}
+
+// ─── State: Air-Gap MicroSD PSBT Signer (BIP-174 Cold Wallet) ────────────────
+void scanAndRenderAirGapPsbt() {
+    rgb.setMode(LED_MODE_SOLID_BLUE);
+    if (!PsbtSigner::initSD()) {
+        ui.renderAirGapScreen("MICROSD ERROR", "NO TF CARD DETECTED", false);
+        psbtLoaded = false;
+        return;
+    }
+
+    if (PsbtSigner::findPendingPsbt(psbtFilePath, sizeof(psbtFilePath))) {
+        psbtLoaded = PsbtSigner::parsePsbtFile(psbtFilePath, currentPsbt, *wallet);
+        if (psbtLoaded && currentPsbt.isValid) {
+            char amtStr[32], feeStr[32];
+            PsbtSigner::formatSatoshis(currentPsbt.sendSatoshis, amtStr, sizeof(amtStr));
+            snprintf(feeStr, sizeof(feeStr), "FEE: %llu sat", currentPsbt.feeSatoshis);
+            ui.renderAirGapPsbt(currentPsbt.fileName, currentPsbt.recipientAddr, amtStr, feeStr, true);
+            rgb.setMode(LED_MODE_PULSE_GREEN); // Pulse green: User presence required to sign!
+            Serial.printf("[PSBT] Loaded %s: %s -> %s\n", currentPsbt.fileName, amtStr, currentPsbt.recipientAddr);
+        } else {
+            ui.renderAirGapScreen(psbtFilePath, "INVALID PSBT FORMAT", false);
+            rgb.flashDoubleTap(255, 140, 0);
+        }
+    } else {
+        ui.renderAirGapScreen("NO PENDING .PSBT", "SD CARD READY", false);
+        psbtLoaded = false;
+    }
+}
+
+void processAirGapSdSignState(ButtonEvent ev) {
+    if (btn.isPressedNow() && psbtLoaded && currentPsbt.isValid) {
+        uint8_t stage = btn.getHoldStage() * 33;
+        if (stage != lastHoldStage) {
+            lastHoldStage = stage;
+            rgb.setHoldProgress((float)stage / 100.0f);
+        }
+    } else if (lastHoldStage > 0) {
+        lastHoldStage = 0;
+        if (psbtLoaded && currentPsbt.isValid) rgb.setMode(LED_MODE_PULSE_GREEN);
+    }
+
+    if (ev == BTN_SHORT_PRESS) {
+        // Rescan SD card
+        rgb.flashTap(0, 150, 255, 60);
+        scanAndRenderAirGapPsbt();
+    } else if (ev == BTN_DOUBLE_CLICK || ev == BTN_VERY_LONG_PRESS) {
+        // Exit back to Vault Dashboard
+        deviceState = STATE_VAULT_DASHBOARD;
+        currentViewCoin = COIN_BTC;
+        rgb.setCoinColor(255, 140, 0);
+        const WalletAccount* acc = wallet->getAccount(COIN_BTC);
+        ui.renderWalletScreen("BITCOIN", "BTC (SegWit)", acc ? acc->address : "", acc ? acc->derivationPath : "");
+    } else if (ev == BTN_LONG_PRESS) {
+        if (psbtLoaded && currentPsbt.isValid) {
+            char signedPath[64] = "";
+            bool ok = PsbtSigner::signPsbtFile(psbtFilePath, *wallet, signedPath, sizeof(signedPath));
+            if (ok) {
+                rgb.flashRainbow(1200);
+                ui.renderSuccessBanner("PSBT SIGNED OK", signedPath);
+                Serial.printf("[PSBT] ✅ Signed and saved to: %s\n", signedPath);
+                delay(1500);
+                deviceState = STATE_VAULT_DASHBOARD;
+                currentViewCoin = COIN_BTC;
+                rgb.setCoinColor(255, 140, 0);
+                const WalletAccount* acc = wallet->getAccount(COIN_BTC);
+                ui.renderWalletScreen("BITCOIN", "BTC (SegWit)", acc ? acc->address : "", acc ? acc->derivationPath : "");
+            } else {
+                rgb.flashDoubleTap(255, 0, 0);
+                ui.renderErrorBanner("SIGNING FAILED");
+                delay(1200);
+                scanAndRenderAirGapPsbt();
+            }
+        }
+    } else if (ev == BTN_PANIC_HOLD) {
+        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
@@ -591,6 +692,7 @@ void handleSerialCommands() {
         Serial.println("  addresses                - Print genuine derived BIP-32/BIP-84/EIP-55 addresses");
         Serial.println("  lock                     - Lock crypto vault immediately");
         Serial.println("  led <btc|eth|sol|rainbow>- Test RGB DotStar LED color mode");
+        Serial.println("  psbt [scan|parse|sign]   - Air-Gapped MicroSD BIP-174 Bitcoin signer");
         Serial.println("  panic                    - Trigger emergency flash nuke");
     } else if (cmd.equalsIgnoreCase("status")) {
         Serial.printf("Uptime: %lus | CPU: %dMHz | Vault: %s | Master PIN: %s | Active Coins: %d\n",
@@ -653,6 +755,56 @@ void handleSerialCommands() {
         } else if (mode.equalsIgnoreCase("softap")) {
             rgb.setMode(LED_MODE_SOFTAP_PULSE);
             Serial.println("[LED] 🟪 SoftAP Portal Neon Pulse activated");
+        }
+    } else if (cmd.startsWith("psbt")) {
+        String sub = cmd.length() > 5 ? cmd.substring(5) : "scan";
+        sub.trim();
+        if (sub.length() == 0 || sub.equalsIgnoreCase("scan")) {
+            char p[64];
+            if (PsbtSigner::findPendingPsbt(p, sizeof(p))) {
+                Serial.printf("[PSBT] 📂 Found pending unsigned file: %s\n", p);
+            } else {
+                Serial.println("[PSBT] ℹ️ No pending unsigned .psbt files found on MicroSD.");
+            }
+        } else if (sub.equalsIgnoreCase("parse")) {
+            char p[64];
+            if (PsbtSigner::findPendingPsbt(p, sizeof(p))) {
+                PsbtTxDetails details;
+                if (PsbtSigner::parsePsbtFile(p, details, *wallet)) {
+                    char amtStr[32], feeStr[32];
+                    PsbtSigner::formatSatoshis(details.sendSatoshis, amtStr, sizeof(amtStr));
+                    PsbtSigner::formatSatoshis(details.feeSatoshis, feeStr, sizeof(feeStr));
+                    Serial.println("\n--- PSBT Transaction Details (BIP-174 WYSIWYS) ---");
+                    Serial.printf("  File:      %s\n", details.fileName);
+                    Serial.printf("  To:        %s\n", details.recipientAddr);
+                    Serial.printf("  Amount:    %s (%llu sats)\n", amtStr, details.sendSatoshis);
+                    Serial.printf("  Miner Fee: %s (%llu sats)\n", feeStr, details.feeSatoshis);
+                    Serial.printf("  Inputs:    %u | Outputs: %u\n", details.numInputs, details.numOutputs);
+                    Serial.printf("  Status:    %s\n", details.isSigned ? "ALREADY SIGNED" : "READY TO SIGN");
+                    Serial.println("--------------------------------------------------\n");
+                } else {
+                    Serial.println("[PSBT] ❌ Error: Could not parse PSBT structure.");
+                }
+            } else {
+                Serial.println("[PSBT] ℹ️ Error: No pending .psbt file found.");
+            }
+        } else if (sub.equalsIgnoreCase("sign")) {
+            if (!wallet->isUnlocked()) {
+                Serial.println("[PSBT] 🔒 Error: Vault must be UNLOCKED first. Run 'unlock <PIN>'.");
+            } else {
+                char p[64];
+                if (PsbtSigner::findPendingPsbt(p, sizeof(p))) {
+                    char signedPath[64];
+                    if (PsbtSigner::signPsbtFile(p, *wallet, signedPath, sizeof(signedPath))) {
+                        rgb.flashRainbow(1200);
+                        Serial.printf("[PSBT] ✅ Successfully signed! Exported to: %s\n", signedPath);
+                    } else {
+                        Serial.println("[PSBT] ❌ Signing failed.");
+                    }
+                } else {
+                    Serial.println("[PSBT] ℹ️ Error: No pending .psbt file found to sign.");
+                }
+            }
         }
     } else if (cmd.startsWith("newseed")) {
         int words = 12;

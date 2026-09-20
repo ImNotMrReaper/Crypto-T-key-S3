@@ -29,7 +29,9 @@ public:
     // Non-Resident Deterministic Derivation
     bool deriveCredentialKey(const char* rpId, const uint8_t* userId, size_t userLen, 
                              uint8_t* privKeyOut, uint8_t* credIdOut);
+    bool deriveCredentialKeyRaw(const uint8_t* rpHash32, uint8_t* privKeyOut, uint8_t* credIdOut);
     bool verifyCredentialId(const char* rpId, const uint8_t* credId, uint8_t* privKeyOut);
+    bool verifyCredentialIdRaw(const uint8_t* rpHash32, const uint8_t* credId, uint8_t* privKeyOut);
 
     // ECDSA Signing & Verification (secp256r1)
     bool signDigest(const uint8_t* privKey, const uint8_t* digest, uint8_t* sigOutDer, size_t* sigLen);

@@ -73,18 +73,25 @@ bool CryptoP256::deriveCredentialKey(const char* rpId, const uint8_t* userId, si
     // 1. Compute RP ID hash
     uint8_t rpHash[32];
     sha256((const uint8_t*)rpId, strlen(rpId), rpHash);
+    bool ok = deriveCredentialKeyRaw(rpHash, privKeyOut, credIdOut);
+    mbedtls_platform_zeroize(rpHash, sizeof(rpHash));
+    return ok;
+}
 
-    // 2. Generate random credential nonce (16 bytes)
+bool CryptoP256::deriveCredentialKeyRaw(const uint8_t* rpHash32, uint8_t* privKeyOut, uint8_t* credIdOut) {
+    if (!rpHash32 || !privKeyOut || !credIdOut) return false;
+
+    // 1. Generate random credential nonce (16 bytes)
     uint8_t nonce[16];
     getRandomBytes(nonce, 16);
 
-    // 3. Derive private key: HMAC-SHA256(MasterSecret, rpHash || nonce)
+    // 2. Derive private key: HMAC-SHA256(MasterSecret, rpHash || nonce)
     uint8_t inputBuf[48];
-    memcpy(inputBuf, rpHash, 32);
+    memcpy(inputBuf, rpHash32, 32);
     memcpy(inputBuf + 32, nonce, 16);
     hmacSha256(_masterSecret, 32, inputBuf, 48, privKeyOut);
 
-    // 4. Create Credential ID: nonce (16 bytes) || HMAC-SHA256(MasterSecret, privKeyOut)[0..15]
+    // 3. Create Credential ID: nonce (16 bytes) || HMAC-SHA256(MasterSecret, privKeyOut)[0..15]
     uint8_t mac[32];
     hmacSha256(_masterSecret, 32, privKeyOut, 32, mac);
     
@@ -94,7 +101,6 @@ bool CryptoP256::deriveCredentialKey(const char* rpId, const uint8_t* userId, si
     // Secure zero ephemeral stack secrets
     mbedtls_platform_zeroize(inputBuf, sizeof(inputBuf));
     mbedtls_platform_zeroize(mac, sizeof(mac));
-    mbedtls_platform_zeroize(rpHash, sizeof(rpHash));
     return true;
 }
 
@@ -103,13 +109,20 @@ bool CryptoP256::verifyCredentialId(const char* rpId, const uint8_t* credId, uin
 
     uint8_t rpHash[32];
     sha256((const uint8_t*)rpId, strlen(rpId), rpHash);
+    bool ok = verifyCredentialIdRaw(rpHash, credId, privKeyOut);
+    mbedtls_platform_zeroize(rpHash, sizeof(rpHash));
+    return ok;
+}
+
+bool CryptoP256::verifyCredentialIdRaw(const uint8_t* rpHash32, const uint8_t* credId, uint8_t* privKeyOut) {
+    if (!rpHash32 || !credId || !privKeyOut) return false;
 
     const uint8_t* nonce = credId;
     const uint8_t* expectedMac = credId + 16;
 
     // Re-derive candidate private key
     uint8_t inputBuf[48];
-    memcpy(inputBuf, rpHash, 32);
+    memcpy(inputBuf, rpHash32, 32);
     memcpy(inputBuf + 32, nonce, 16);
     hmacSha256(_masterSecret, 32, inputBuf, 48, privKeyOut);
 
@@ -125,7 +138,6 @@ bool CryptoP256::verifyCredentialId(const char* rpId, const uint8_t* credId, uin
 
     mbedtls_platform_zeroize(inputBuf, sizeof(inputBuf));
     mbedtls_platform_zeroize(mac, sizeof(mac));
-    mbedtls_platform_zeroize(rpHash, sizeof(rpHash));
 
     if (diff != 0) {
         mbedtls_platform_zeroize(privKeyOut, 32);

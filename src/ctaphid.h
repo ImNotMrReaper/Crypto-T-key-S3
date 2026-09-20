@@ -65,9 +65,14 @@ public:
 
     void handleIncomingPacket(const uint8_t* buffer, uint16_t len);
 
-    // Callbacks to CTAP2 core
+    // Callbacks to CTAP2 / CTAP1 core & telemetry
     typedef void (*CborHandler)(uint32_t cid, const uint8_t* req, uint16_t reqLen);
+    typedef void (*MsgHandler)(uint32_t cid, const uint8_t* req, uint16_t reqLen);
+    typedef void (*WinkHandler)(uint32_t cid);
+
     void setCborHandler(CborHandler handler) { _cborHandler = handler; }
+    void setMsgHandler(MsgHandler handler) { _msgHandler = handler; }
+    void setWinkHandler(WinkHandler handler) { _winkHandler = handler; }
 
 private:
     uint32_t allocateCid();
@@ -81,6 +86,8 @@ private:
     bool _isReceiving;
     unsigned long _lastPacketTime;
     CborHandler _cborHandler;
+    MsgHandler _msgHandler;
+    WinkHandler _winkHandler;
     bool _diagnosticMode;
 };
 

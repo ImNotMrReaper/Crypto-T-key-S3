@@ -26,6 +26,7 @@ public:
     void renderSeedBackupScreen(int wordNum, int totalWords, const char* word);
     void renderEntropyGatherScreen(int currentSamples, int requiredSamples);
     void renderAirGapScreen(const char* psbtFile, const char* summary, bool readyToSign);
+    void renderAirGapPsbt(const char* fileName, const char* recipient, const char* amountBtc, const char* feeStr, bool readyToSign);
     void renderOobeWizard(uint8_t step, const char* title, const char* detail, const char* hint);
     void renderSuccessBanner(const char* title, const char* subtitle);
     void renderErrorBanner(const char* message);

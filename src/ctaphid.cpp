@@ -59,14 +59,23 @@ public:
     }
 
     bool sendReport(const uint8_t* report) {
-        return HID.SendReport(0, report, CTAPHID_PACKET_SIZE);
+        uint32_t start = millis();
+        while (millis() - start < 1000) {
+            if (HID.ready()) {
+                if (HID.SendReport(0, report, CTAPHID_PACKET_SIZE)) {
+                    return true;
+                }
+            }
+            delay(1);
+        }
+        return false;
     }
 };
 
 static FidoHidDevice fidoDev;
 
 CtapHid::CtapHid() 
-    : _nextCid(1), _isReceiving(false), _lastPacketTime(0), _cborHandler(nullptr), _diagnosticMode(false) {
+    : _nextCid(1), _isReceiving(false), _lastPacketTime(0), _cborHandler(nullptr), _msgHandler(nullptr), _winkHandler(nullptr), _diagnosticMode(false) {
     memset(&_rxMsg, 0, sizeof(_rxMsg));
 }
 
@@ -77,7 +86,7 @@ void CtapHid::begin(bool diagnosticMode) {
     
     // Start USB
     USB.VID(0x303A); // Espressif
-    USB.PID(0x4001); // Unique PID for Crypto TKey S3 FIDO Authenticator
+    USB.PID(0x1001); // Standard Espressif Composite CDC + HID PID
     USB.productName("Crypto TKey S3 Authenticator");
     USB.manufacturerName("Reaper Security Systems");
     USB.serialNumber("TKEY-S3-007");
@@ -169,6 +178,13 @@ void CtapHid::dispatchMessage() {
         case CTAPHID_CMD_PING:
             handlePing(_rxMsg.cid, _rxMsg.data, _rxMsg.length);
             break;
+        case CTAPHID_CMD_MSG:
+            if (_msgHandler) {
+                _msgHandler(_rxMsg.cid, _rxMsg.data, _rxMsg.length);
+            } else {
+                sendError(_rxMsg.cid, CTAP1_ERR_INVALID_COMMAND);
+            }
+            break;
         case CTAPHID_CMD_WINK:
             handleWink(_rxMsg.cid);
             break;
@@ -219,7 +235,9 @@ void CtapHid::handlePing(uint32_t cid, const uint8_t* payload, uint16_t len) {
 }
 
 void CtapHid::handleWink(uint32_t cid) {
-    // Visual indicator pulse
+    if (_winkHandler) {
+        _winkHandler(cid);
+    }
     sendResponse(cid, CTAPHID_CMD_WINK, nullptr, 0);
 }
 
