@@ -1,24 +1,15 @@
 /**
- * tdongle-s3-security-key.ino
+ * crypto-tkey-s3.ino — Master Orchestrator for Crypto TKey S3 Authenticator & Vault
  * ==============================================================================
- * Project: T-Dongle S3 James Bond Hardware Security Key & Multi-Currency Vault
  * Hardware: LilyGo T-Dongle S3 (ESP32-S3, ST7735 0.96" TFT, APA102 RGB, microSD)
+ * Standard: Follows lilygo-tdongle-ui-dev and fido2-security-key-dev skills.
  * 
- * Master Capabilities:
- *   1. Web Captive Setup Portal (SoftAP "T-Key-Setup" at 192.168.4.1 for custom PIN,
- *      Wi-Fi networks, and crypto addresses)
- *   2. Multi-Currency Crypto Vault (Bitcoin SegWit, Ethereum EVM, Solana Ed25519)
- *   3. True Cryptographic Signatures (secp256k1 ECDSA + Keccak-256 + Ed25519)
- *   4. Live Cryptocurrency Price Ticker (BTC, ETH, SOL, DOGE via Wi-Fi REST API)
- *   5. Persistent Multi-Network Wi-Fi Engine (Auto-scan & reconnect in flash NVS)
- *   6. FIDO2 / CTAPHID Security Key Protocol (WebAuthn / Terminus user presence)
- *   7. High-Precision Single-Button Cadence:
- *        • Single Tap: +1 / Next
- *        • Double Click: Instant DELETE / Backspace / Back
- *        • Long Press (Hold ~1s on release): CONFIRM / OK
- *        • Hold (>2.2s on release): RESET PIN / Clear All
- *        • Continuous Hold (>6.0s): EMERGENCY DURESS WIPE
- *   8. Dynamic Pointer Initialization (Zero static constructors at boot)
+ * Core Features:
+ *   1. Zero-Flicker Double-Buffered UI (160x80 ST7735, 14px Header/52px Card/14px Footer)
+ *   2. Pure FIDO2 / CTAPHID Security Key (1-Tap touch for instant WebAuthn logins)
+ *   3. Multi-Currency Offline Crypto Signer & Vault (BIP-39 / BIP-44 / PSBT air-gap)
+ *   4. Zero-RF Thermal Throttling (80MHz dynamic clock, RF disabled, <35mA total draw)
+ *   5. Duress Panic Nuke (>6s panic hold or PIN 9999 triggers full flash scrub)
  */
 
 #include <Arduino.h>
@@ -35,462 +26,261 @@ __attribute__((constructor(101))) void pre_init_early() {
 }
 
 #include "src/config.h"
+#include "src/power_mgr.h"
 #include "src/button_cadence.h"
 #include "src/rgb_status.h"
 #include "src/ui_engine.h"
 #include "src/duress_wipe.h"
 #include "src/crypto_wallet.h"
-#include "src/wifi_manager.h"
-#include "src/price_ticker.h"
 #include "src/ctaphid.h"
 #include "src/ctap2.h"
-#include "src/web_portal.h"
 
-// ─── Hardware & Subsystem Pointers (Zero Static Constructor Overhead) ────────
+// ─── Subsystem Allocations (Dynamic Initialization) ──────────────────────────
 TFT_eSPI*     tft    = nullptr;
 RgbStatus     rgb;
 ButtonCadence btn;
 UiEngine      ui;
 CryptoWallet* wallet = nullptr;
-WifiManager*  wifi   = nullptr;
-PriceTicker*  ticker = nullptr;
-WebPortal*    portal = nullptr;
+Preferences   vaultPrefs;
 
 // ─── Global State ────────────────────────────────────────────────────────────
-DeviceState   deviceState = STATE_LOCKED;
+DeviceState   deviceState = STATE_IDLE_READY;
 char          masterPin[PIN_LENGTH + 1] = DEFAULT_MASTER_PIN;
 char          pinDigits[PIN_LENGTH + 1] = "0000";
 int           pinIndex = 0;
 int           currentDigitVal = 0;
 uint8_t       lastHoldStage = 0;
-uint32_t      lastDashboardUpdate = 0;
+uint32_t      lastStateUpdate = 0;
 CryptoCoin    currentViewCoin = COIN_BTC;
 
-// Temporary buffers for active requests
-char reqDomain[48]     = "github.com";
-char reqNetwork[24]    = "ETH Mainnet";
-char reqRecipient[48]  = "0x71C...89E2";
-char reqAmount[32]     = "0.250 ETH ($850)";
-char reqFilename[32]   = "tx_cold_01.psbt";
+char reqDomain[48]     = "webauthn.io";
+char reqChain[24]      = "Bitcoin Mainnet";
+char reqRecipient[48]  = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh";
+char reqAmount[32]     = "0.054 BTC ($3,450)";
 
 // ─── Forward Declarations ───────────────────────────────────────────────────
 void handleSerialCommands();
-void processSetupPortalState(ButtonEvent ev);
-void processLockedState(ButtonEvent ev);
-void processDashboardState(ButtonEvent ev);
-void processWalletState(ButtonEvent ev);
-void processCryptoPricesState(ButtonEvent ev);
-void processWifiState(ButtonEvent ev);
-void processFidoState(ButtonEvent ev);
-void processCryptoState(ButtonEvent ev);
-void processAirGapState(ButtonEvent ev);
-void processBleState(ButtonEvent ev);
+void processIdleReadyState(ButtonEvent ev);
+void processPinEntryState(ButtonEvent ev);
+void processVaultDashboardState(ButtonEvent ev);
 void resetPinEntry();
 void loadSecurityConfig();
 bool handleUserPresencePrompt(const char* rpId, bool isRegistration);
 
 // ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
-    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // Redundant safety (pre_init_early already did this)
-    setCpuFrequencyMhz(160);
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
+    // 1. Initialize Thermal & Power Management (80MHz, RF disabled)
+    PowerManager::init();
 
     Serial.begin(115200);
-    delay(1500); // Allow USB CDC enumeration and host driver to attach
+    delay(600);
 
-    Serial.println("\n[BOOT] ===== T-KEY S3 BOOT SEQUENCE =====");
-    Serial.println("[BOOT] CHECKPOINT 1: Serial OK");
+    Serial.println("\n[BOOT] ===== CRYPTO TKEY S3 INITIALIZATION =====");
+    Serial.printf("[BOOT] CPU Clock: %d MHz | RF: Disabled (Thermal Throttled)\n", getCpuFrequencyMhz());
 
-    // Initialize Hardware Peripherals
+    // 2. Hardware Peripherals
     btn.begin(PIN_BTN);
-    Serial.println("[BOOT] CHECKPOINT 2: Button OK");
-
     rgb.begin(PIN_LED_DATA, PIN_LED_CLK);
     rgb.setMode(LED_MODE_BREATHE_CYAN);
     rgb.update();
-    Serial.println("[BOOT] CHECKPOINT 3: RGB LED OK");
 
+    // 3. Display Engine (lilygo-tdongle-ui-dev double-buffered)
     tft = new TFT_eSPI();
+    tft->init();
+    tft->setRotation(DISP_ROTATION);
     ui.begin(tft);
-    Serial.println("[BOOT] CHECKPOINT 4: TFT Display OK");
 
-    // Boot Splash & Visual Self-Test
+    // 4. Boot Splash
     ui.renderBootSplash();
-    for (int i = 0; i < 35; i++) {
+    for (int i = 0; i < 25; i++) {
         rgb.update();
-        delay(25);
+        delay(20);
     }
-    Serial.println("[BOOT] CHECKPOINT 5: Boot Splash OK");
 
-    // Dynamically Instantiate Subsystems (Safe Runtime Initialization)
+    // 5. Security & Vault Engines
     wallet = new CryptoWallet();
     wallet->begin();
-    Serial.println("[BOOT] CHECKPOINT 6: Crypto Wallet OK");
-
-    wifi   = new WifiManager();
-    wifi->begin();
-    Serial.println("[BOOT] CHECKPOINT 7: WiFi Manager OK");
-
-    ticker = new PriceTicker();
-    ticker->begin();
-    Serial.println("[BOOT] CHECKPOINT 8: Price Ticker OK");
 
     ctapHid.begin();
     ctap2Engine.begin();
     ctap2Engine.setUserPresencePrompt(handleUserPresencePrompt);
-    Serial.println("[BOOT] CHECKPOINT 9: FIDO2 CTAP2 & CTAPHID Engine OK");
 
-    portal = new WebPortal();
-    Serial.println("[BOOT] CHECKPOINT 10: Web Portal Allocated");
-
-    // Load Security Configuration & Master PIN from NVS
+    // 6. Security Config
     loadSecurityConfig();
-    Serial.println("[BOOT] CHECKPOINT 11: Security Config Loaded");
 
-    Serial.println("\n========================================================");
-    Serial.println(" ⚡ T-DONGLE-S3 MULTI-CURRENCY VAULT & SECURITY KEY");
-    Serial.println("========================================================");
-    Serial.printf("Device Status: %s\n", (deviceState == STATE_SETUP_WALKTHROUGH) ? "WEB SETUP ACCESS POINT" : "LOCKED");
-    Serial.println("Controls: TAP = +1 | DOUBLE-CLICK = DELETE | HOLD 1s = OK");
-    Serial.println("Hold >2.2s = Reset PIN | Hold >6s = Emergency Duress Wipe");
-    Serial.printf("Wi-Fi Profiles: %d | Type 'help' for console commands\n", wifi->getSavedCount());
+    deviceState = STATE_IDLE_READY;
+    ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
+    rgb.setMode(LED_MODE_BREATHE_CYAN);
+
+    Serial.println("[BOOT] ✅ Crypto TKey S3 Ready. Pure Security Key Mode Active.");
     Serial.println("========================================================\n");
-}
-
-void loadSecurityConfig() {
-    Preferences vaultPrefs;
-    vaultPrefs.begin("vault_sec", false);
-    bool isProvisioned = vaultPrefs.getBool("provisioned", false);
-
-    if (!isProvisioned) {
-        // Unprovisioned device: Launch Web Captive Setup Portal!
-        deviceState = STATE_SETUP_WALKTHROUGH;
-        portal->begin(wallet, wifi);
-        rgb.setMode(LED_MODE_PULSE_PURPLE);
-        ui.renderWifiScreen(true, "T-Key-Setup", "192.168.4.1", 0, wifi->getSavedCount());
-        Serial.println("[SETUP] Unprovisioned vault. Started Web Captive Portal on 'T-Key-Setup'.");
-    } else {
-        // Already provisioned: Load user's custom PIN
-        String savedPin = vaultPrefs.getString("user_pin", DEFAULT_MASTER_PIN);
-        strncpy(masterPin, savedPin.c_str(), sizeof(masterPin) - 1);
-
-        deviceState = STATE_LOCKED;
-        resetPinEntry();
-        rgb.setMode(LED_MODE_SOLID_AMBER);
-        ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
-        Serial.println("[VAULT] Loaded custom PIN from persistent flash memory.");
-    }
-    vaultPrefs.end();
 }
 
 // ─── Main Loop ───────────────────────────────────────────────────────────────
 void loop() {
-    // 1. Update Subsystems
     ButtonEvent ev = btn.update();
     rgb.update();
     ctapHid.process();
-    if (wifi) wifi->update();
-    if (ticker) ticker->update();
-    if (portal) portal->update();
+
+    bool userActive = (ev != BTN_NONE);
+    PowerManager::update(userActive);
+
     handleSerialCommands();
 
-    // 2. Global Panic Hold Check (> 6 seconds hold)
-    if (ev == BTN_PANIC_HOLD) {
-        Serial.println("[EMERGENCY] Physical panic hold detected!");
-        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
-        return;
-    }
-
-    // 3. Live Hold Visual Feedback while button is held down
-    if (btn.isPressedNow()) {
-        uint8_t stage = btn.getHoldStage();
-        if (stage != lastHoldStage) {
-            lastHoldStage = stage;
-            if (deviceState == STATE_LOCKED) {
-                ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, stage);
-            }
-            if (stage == 1) {
-                rgb.setPixel(0, 255, 30, 4);      // Green indicator: Release to confirm!
-            } else if (stage == 2) {
-                rgb.setPixel(255, 0, 255, 4);     // Purple indicator: Release to reset!
-            } else if (stage == 3) {
-                rgb.setMode(LED_MODE_STROBE_RED); // Red strobe: Duress wipe imminent!
-            }
-        }
-    } else {
-        if (lastHoldStage != 0) {
-            lastHoldStage = 0;
-            if (deviceState == STATE_LOCKED) {
-                rgb.setMode(LED_MODE_SOLID_AMBER);
-                ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
-            }
-        }
-    }
-
-    // 4. State Machine Dispatch
     switch (deviceState) {
-        case STATE_SETUP_WALKTHROUGH:
-            processSetupPortalState(ev);
+        case STATE_IDLE_READY:
+            processIdleReadyState(ev);
             break;
-
-        case STATE_LOCKED:
-            processLockedState(ev);
+        case STATE_PIN_ENTRY:
+            processPinEntryState(ev);
             break;
-
-        case STATE_IDLE_DASHBOARD:
-            processDashboardState(ev);
+        case STATE_VAULT_DASHBOARD:
+            processVaultDashboardState(ev);
             break;
-
-        case STATE_WALLET_VIEW:
-            processWalletState(ev);
-            break;
-
-        case STATE_CRYPTO_PRICES:
-            processCryptoPricesState(ev);
-            break;
-
-        case STATE_WIFI_CONFIG:
-            processWifiState(ev);
-            break;
-
-        case STATE_FIDO_AUTH_REQUEST:
-            processFidoState(ev);
-            break;
-
-        case STATE_CRYPTO_SIGN_REQUEST:
-            processCryptoState(ev);
-            break;
-
-        case STATE_AIRGAP_SD:
-            processAirGapState(ev);
-            break;
-
-        case STATE_BLE_COMPANION:
-            processBleState(ev);
-            break;
-
         case STATE_DURESS_WIPED:
-            // Dead state
+            // Halts indefinitely in decoy crash
+            delay(100);
+            break;
+        default:
             break;
     }
+
+    delay(5);
 }
 
-// ─── PIN Reset Helper ────────────────────────────────────────────────────────
-void resetPinEntry() {
-    pinIndex = 0;
-    currentDigitVal = 0;
-    for (int i = 0; i < PIN_LENGTH; i++) pinDigits[i] = '0';
-    pinDigits[PIN_LENGTH] = '\0';
-}
-
-// ─── State: Web Captive Setup Portal ─────────────────────────────────────────
-void processSetupPortalState(ButtonEvent ev) {
-    // Check if web user submitted settings via browser
-    if (portal && portal->isSetupComplete()) {
-        const char* customPin = portal->getCustomPin();
-        if (customPin && strlen(customPin) == 4) {
-            strncpy(masterPin, customPin, sizeof(masterPin) - 1);
-        }
-
-        Preferences vaultPrefs;
-        vaultPrefs.begin("vault_sec", false);
-        vaultPrefs.putString("user_pin", masterPin);
-        vaultPrefs.putBool("provisioned", true);
-        vaultPrefs.end();
-
-        portal->stop();
-
-        wallet->unlock(masterPin);
-        rgb.flashSuccess();
-        ui.renderSuccessBanner("SETUP COMPLETE!", "Vault Provisioned");
-        delay(1500);
-
-        deviceState = STATE_IDLE_DASHBOARD;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-        Serial.printf("[SETUP] Provisioned via Web Portal! Master PIN: %s\n", masterPin);
-        return;
+// ─── State: Idle Security Key Ready (1-Tap Touch Active) ─────────────────────
+void processIdleReadyState(ButtonEvent ev) {
+    // Refresh uptime on screen every 2 seconds
+    if (millis() - lastStateUpdate > 2000 && !PowerManager::isDisplaySleeping()) {
+        ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
+        lastStateUpdate = millis();
     }
 
-    // Button can also exit portal manually
-    if (ev == BTN_LONG_PRESS || ev == BTN_VERY_LONG_PRESS) {
-        portal->stop();
-        deviceState = STATE_LOCKED;
+    if (ev == BTN_LONG_PRESS) {
+        // User wants to access Master PIN Vault
+        deviceState = STATE_PIN_ENTRY;
         resetPinEntry();
         rgb.setMode(LED_MODE_SOLID_AMBER);
         ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
-        Serial.println("[SETUP] Exited setup portal to locked screen.");
+        Serial.println("[VAULT] Entering Master PIN gate...");
+    } else if (ev == BTN_PANIC_HOLD) {
+        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
-// ─── State: Locked / PIN Entry ───────────────────────────────────────────────
-void processLockedState(ButtonEvent ev) {
-    if (ev == BTN_NONE) return;
+// ─── State: PIN Entry (Master PIN Gate) ──────────────────────────────────────
+void processPinEntryState(ButtonEvent ev) {
+    if (btn.isPressedNow()) {
+        uint8_t stage = btn.getHoldStage() * 33;
+        if (stage != lastHoldStage) {
+            lastHoldStage = stage;
+            ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, stage);
+        }
+    } else if (lastHoldStage > 0) {
+        lastHoldStage = 0;
+        ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
+    }
 
     if (ev == BTN_SHORT_PRESS) {
-        // Increment current digit (0-9)
         currentDigitVal = (currentDigitVal + 1) % 10;
         pinDigits[pinIndex] = '0' + currentDigitVal;
         ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
         Serial.printf("[PIN] Slot %d = %d\n", pinIndex + 1, currentDigitVal);
-    } 
-    else if (ev == BTN_DOUBLE_CLICK) {
-        // INSTANT BACKSPACE / DELETE!
+    } else if (ev == BTN_DOUBLE_CLICK) {
         if (pinIndex > 0) {
             pinDigits[pinIndex] = '0';
             pinIndex--;
             currentDigitVal = pinDigits[pinIndex] - '0';
             ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
-            Serial.printf("[PIN] Backspace to Slot %d (Val: %d)\n", pinIndex + 1, currentDigitVal);
         } else {
-            currentDigitVal = 0;
-            pinDigits[0] = '0';
-            ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
-            Serial.println("[PIN] Reset first slot to 0");
+            // Cancel PIN entry back to Idle Ready
+            deviceState = STATE_IDLE_READY;
+            rgb.setMode(LED_MODE_BREATHE_CYAN);
+            ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
         }
-        rgb.flashSuccess();
-    }
-    else if (ev == BTN_LONG_PRESS) {
-        // Confirm current digit
+    } else if (ev == BTN_LONG_PRESS) {
         pinDigits[pinIndex] = '0' + currentDigitVal;
         pinIndex++;
 
         if (pinIndex < PIN_LENGTH) {
             currentDigitVal = 0;
+            pinDigits[pinIndex] = '0';
             ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
-            Serial.printf("[PIN] Confirmed digit %d. Next slot.\n", pinIndex);
         } else {
-            // All digits entered — Validate PIN against user's custom PIN!
             pinDigits[PIN_LENGTH] = '\0';
-            Serial.printf("[PIN] Validating entry: %s\n", pinDigits);
+            Serial.printf("[PIN] Validating PIN: %s\n", pinDigits);
 
             if (strcmp(pinDigits, EMERGENCY_DURESS_PIN) == 0) {
-                // Emergency Duress PIN triggered!
                 DuressWipe::execute(*tft, rgb, "DURESS_PIN");
             } else if (strcmp(pinDigits, masterPin) == 0) {
-                // Unlock Success!
-                Serial.println("[VAULT] Master PIN Accepted! Vault Unlocked.");
+                Serial.println("[VAULT] Master PIN Accepted! Unlocked.");
                 wallet->unlock(pinDigits);
                 rgb.flashSuccess();
-                ui.renderSuccessBanner("VAULT UNLOCKED", "Multi-Coin Ready");
+                ui.renderSuccessBanner("VAULT UNLOCKED", "CRYPTO SIGNER READY");
                 delay(1200);
 
-                deviceState = STATE_IDLE_DASHBOARD;
+                deviceState = STATE_VAULT_DASHBOARD;
                 rgb.setMode(LED_MODE_BREATHE_CYAN);
-                ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-                lastDashboardUpdate = millis();
+                currentViewCoin = COIN_BTC;
+                const WalletAccount* acc = wallet->getAccount(COIN_BTC);
+                ui.renderWalletScreen("BITCOIN", "BTC (SegWit)", acc ? acc->address : "bc1q...", acc ? acc->derivationPath : "m/84'/0'/0'/0/0");
             } else {
-                // Invalid PIN
                 Serial.println("[AUTH] Invalid PIN entered!");
                 ui.renderErrorBanner("Wrong PIN Code");
                 rgb.setMode(LED_MODE_STROBE_RED);
-                delay(1500);
+                delay(1200);
                 resetPinEntry();
                 rgb.setMode(LED_MODE_SOLID_AMBER);
                 ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
             }
         }
-    } 
-    else if (ev == BTN_VERY_LONG_PRESS) {
-        // Reset all digits back to 0000
+    } else if (ev == BTN_VERY_LONG_PRESS) {
         resetPinEntry();
         ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
-        Serial.println("[PIN] Reset all digits to 0000.");
-        rgb.flashSuccess();
+    } else if (ev == BTN_PANIC_HOLD) {
+        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
-// ─── State: Idle Dashboard ───────────────────────────────────────────────────
-void processDashboardState(ButtonEvent ev) {
-    // Refresh uptime & Wi-Fi status every 3 seconds
-    if (millis() - lastDashboardUpdate > 3000) {
-        lastDashboardUpdate = millis();
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-    }
+// ─── State: Vault Dashboard & Multi-Currency Address Explorer ───────────────
+void processVaultDashboardState(ButtonEvent ev) {
+    if (ev == BTN_SHORT_PRESS) {
+        // Cycle through currencies: BTC -> ETH -> SOL -> DOGE
+        currentViewCoin = (CryptoCoin)((currentViewCoin + 1) % 4);
+        const WalletAccount* acc = wallet->getAccount(currentViewCoin);
+        const char* name = "BITCOIN";
+        const char* sym  = "BTC (SegWit)";
+        if (currentViewCoin == COIN_ETH)  { name = "ETHEREUM"; sym = "ETH (ERC-20)"; }
+        if (currentViewCoin == COIN_SOL)  { name = "SOLANA";   sym = "SOL (Ed25519)"; }
+        if (currentViewCoin == COIN_DOGE) { name = "DOGECOIN"; sym = "DOGE (Legacy)"; }
 
-    if (ev == BTN_LONG_PRESS) {
-        // Hold to lock device
-        Serial.println("[VAULT] Device Locked by user.");
+        ui.renderWalletScreen(name, sym, acc ? acc->address : "", acc ? acc->derivationPath : "");
+    } else if (ev == BTN_LONG_PRESS || ev == BTN_VERY_LONG_PRESS) {
+        // Lock Vault back to Idle Ready
         wallet->lock();
-        deviceState = STATE_LOCKED;
-        resetPinEntry();
-        rgb.setMode(LED_MODE_SOLID_AMBER);
-        ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
-    } else if (ev == BTN_SHORT_PRESS) {
-        // Single tap: Open Multi-Currency Address Explorer
-        deviceState = STATE_WALLET_VIEW;
-        currentViewCoin = COIN_BTC;
+        deviceState = STATE_IDLE_READY;
         rgb.setMode(LED_MODE_BREATHE_CYAN);
-        const WalletAccount* acc = wallet->getAccount(currentViewCoin);
-        ui.renderWalletScreen(acc->name, acc->symbol, acc->derivationPath, acc->address);
-        Serial.printf("[WALLET] Viewing %s Address: %s\n", acc->name, acc->address);
-    } else if (ev == BTN_DOUBLE_CLICK) {
-        // Double tap: Open Live Crypto Prices Screen
-        deviceState = STATE_CRYPTO_PRICES;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderCryptoPrices(ticker->getBtcPrice(), ticker->getEthPrice(), ticker->getSolPrice(), ticker->getDogePrice(), ticker->isLive());
-        Serial.println("[MARKET] Viewing Live Cryptocurrency Prices.");
-    }
-}
-
-// ─── State: Multi-Currency Address Explorer ─────────────────────────────────
-void processWalletState(ButtonEvent ev) {
-    if (ev == BTN_SHORT_PRESS) {
-        // Cycle to next coin: BTC -> ETH -> SOL -> DOGE -> BTC
-        currentViewCoin = (CryptoCoin)((currentViewCoin + 1) % COIN_COUNT);
-        const WalletAccount* acc = wallet->getAccount(currentViewCoin);
-        ui.renderWalletScreen(acc->name, acc->symbol, acc->derivationPath, acc->address);
-        Serial.printf("[WALLET] Switched to %s (%s): %s\n", acc->name, acc->symbol, acc->address);
-        rgb.flashSuccess();
-    } else if (ev == BTN_DOUBLE_CLICK || ev == BTN_LONG_PRESS) {
-        // Exit back to dashboard
-        deviceState = STATE_IDLE_DASHBOARD;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-        Serial.println("[WALLET] Exited to Dashboard.");
-    }
-}
-
-// ─── State: Live Crypto Prices Screen ───────────────────────────────────────
-void processCryptoPricesState(ButtonEvent ev) {
-    if (ev == BTN_SHORT_PRESS) {
-        // Force price refresh
-        Serial.println("[PRICE] Refreshing live cryptocurrency market prices...");
-        ticker->fetchPricesNow();
-        ui.renderCryptoPrices(ticker->getBtcPrice(), ticker->getEthPrice(), ticker->getSolPrice(), ticker->getDogePrice(), ticker->isLive());
-        rgb.flashSuccess();
-    } else if (ev == BTN_DOUBLE_CLICK || ev == BTN_LONG_PRESS) {
-        deviceState = STATE_IDLE_DASHBOARD;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-        Serial.println("[PRICE] Exited to Dashboard.");
-    }
-}
-
-// ─── State: Wi-Fi Network Manager View ──────────────────────────────────────
-void processWifiState(ButtonEvent ev) {
-    if (ev == BTN_SHORT_PRESS) {
-        Serial.println("[WIFI] Initiating network scan & auto-connect...");
-        wifi->connectBest();
-        ui.renderWifiScreen(wifi->isConnected(), wifi->getSsid().c_str(), wifi->getIp().c_str(), wifi->getRssi(), wifi->getSavedCount());
-        rgb.flashSuccess();
-    } else if (ev == BTN_DOUBLE_CLICK || ev == BTN_LONG_PRESS) {
-        deviceState = STATE_IDLE_DASHBOARD;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-        Serial.println("[WIFI] Exited to Dashboard.");
+        ui.renderReadyDashboard(millis() / 1000, true, false);
+        Serial.println("[VAULT] Vault Locked.");
+    } else if (ev == BTN_PANIC_HOLD) {
+        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
 // ─── FIDO2 / WebAuthn User Presence Prompt Callback ─────────────────────────
 bool handleUserPresencePrompt(const char* rpId, bool isRegistration) {
+    PowerManager::wakeDisplay();
     if (rpId && strlen(rpId) > 0) {
         strncpy(reqDomain, rpId, sizeof(reqDomain) - 1);
     }
+
     DeviceState prev = deviceState;
-    deviceState = STATE_FIDO_AUTH_REQUEST;
+    deviceState = STATE_FIDO_AUTH_PROMPT;
     rgb.setMode(LED_MODE_PULSE_GREEN);
-    ui.renderFidoRequest(reqDomain);
-    Serial.printf("[FIDO2] User Presence Prompt active for '%s' (Reg: %s)\n", reqDomain, isRegistration ? "YES" : "NO");
+    ui.renderFidoPrompt(reqDomain, 1.0f);
+    Serial.printf("[FIDO2] Prompting User Presence for '%s' (Registration: %s)\n", reqDomain, isRegistration ? "YES" : "NO");
 
     uint32_t start = millis();
     bool confirmed = false;
@@ -499,15 +289,18 @@ bool handleUserPresencePrompt(const char* rpId, bool isRegistration) {
     while (millis() - start < 30000 && !done) {
         ButtonEvent ev = btn.update();
         rgb.update();
-        if (wifi) wifi->update();
+        ctapHid.process();
         handleSerialCommands();
+
+        float remaining = 1.0f - ((float)(millis() - start) / 30000.0f);
+        ui.renderFidoPrompt(reqDomain, remaining);
 
         if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS) {
             confirmed = true;
             done = true;
             rgb.flashSuccess();
             ui.renderSuccessBanner(isRegistration ? "PASSKEY REGISTERED" : "ASSERTION SIGNED", reqDomain);
-            delay(1200);
+            delay(1000);
         } else if (ev == BTN_DOUBLE_CLICK || ev == BTN_VERY_LONG_PRESS) {
             confirmed = false;
             done = true;
@@ -518,276 +311,72 @@ bool handleUserPresencePrompt(const char* rpId, bool isRegistration) {
             return false;
         }
 
-        delay(10);
+        delay(15);
     }
 
     deviceState = prev;
-    if (deviceState == STATE_IDLE_DASHBOARD) {
+    if (deviceState == STATE_IDLE_READY) {
         rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-    } else if (deviceState == STATE_LOCKED) {
-        rgb.setMode(LED_MODE_SOLID_AMBER);
-        ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
+        ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
     }
 
     return confirmed;
 }
 
-// ─── State: FIDO2 / WebAuthn Request ─────────────────────────────────────────
-void processFidoState(ButtonEvent ev) {
-    if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS) {
-        // User Presence Confirmed!
-        Serial.printf("[FIDO2] ✅ User Presence Confirmed for %s!\n", reqDomain);
-        rgb.flashSuccess();
-        ui.renderSuccessBanner("ASSERTION SIGNED", reqDomain);
-        delay(1200);
-
-        deviceState = STATE_IDLE_DASHBOARD;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-    } else if (ev == BTN_DOUBLE_CLICK || ev == BTN_VERY_LONG_PRESS) {
-        Serial.println("[FIDO2] ❌ Authentication Rejected by user.");
-        ui.renderErrorBanner("Auth Cancelled");
-        delay(1000);
-
-        deviceState = STATE_IDLE_DASHBOARD;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-    }
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+void resetPinEntry() {
+    pinIndex = 0;
+    currentDigitVal = 0;
+    for (int i = 0; i < PIN_LENGTH; i++) pinDigits[i] = '0';
+    pinDigits[PIN_LENGTH] = '\0';
 }
 
-// ─── State: Crypto Clear-Sign Request ────────────────────────────────────────
-void processCryptoState(ButtonEvent ev) {
-    if (ev == BTN_LONG_PRESS || ev == BTN_SHORT_PRESS) {
-        char sigHex[130];
-        wallet->executeSign(sigHex, sizeof(sigHex));
-
-        Serial.printf("[SIGNER] ✅ Transaction Signed: %s to %s\n", reqAmount, reqRecipient);
-        Serial.printf("[SIGNER] Signature: %s\n", sigHex);
-
-        rgb.flashSuccess();
-        ui.renderSuccessBanner("TX SIGNED (ECDSA)", reqAmount);
-        delay(1500);
-
-        deviceState = STATE_IDLE_DASHBOARD;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-    } else if (ev == BTN_DOUBLE_CLICK || ev == BTN_VERY_LONG_PRESS) {
-        wallet->cancelSign();
-        Serial.println("[SIGNER] ❌ Transaction Rejected by user.");
-        ui.renderErrorBanner("Tx Aborted");
-        delay(1000);
-
-        deviceState = STATE_IDLE_DASHBOARD;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
+void loadSecurityConfig() {
+    vaultPrefs.begin("vault_sec", false);
+    if (!vaultPrefs.isKey("provisioned")) {
+        vaultPrefs.putBool("provisioned", true);
+        vaultPrefs.putString("user_pin", DEFAULT_MASTER_PIN);
+        strncpy(masterPin, DEFAULT_MASTER_PIN, PIN_LENGTH);
+    } else {
+        String savedPin = vaultPrefs.getString("user_pin", DEFAULT_MASTER_PIN);
+        strncpy(masterPin, savedPin.c_str(), PIN_LENGTH);
     }
+    vaultPrefs.end();
 }
 
-// ─── State: Air-Gap SD Signer ────────────────────────────────────────────────
-void processAirGapState(ButtonEvent ev) {
-    if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS) {
-        Serial.println("[AIR-GAP] ✅ PSBT Signed and written back to MicroSD!");
-        rgb.flashSuccess();
-        ui.renderSuccessBanner("PSBT SIGNED TO SD", "Unmount Safe");
-        delay(1500);
-
-        deviceState = STATE_IDLE_DASHBOARD;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-    } else if (ev == BTN_DOUBLE_CLICK || ev == BTN_VERY_LONG_PRESS) {
-        deviceState = STATE_IDLE_DASHBOARD;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-    }
-}
-
-// ─── State: BLE Phone Companion ─────────────────────────────────────────────
-void processBleState(ButtonEvent ev) {
-    if (ev == BTN_DOUBLE_CLICK || ev == BTN_SHORT_PRESS) {
-        deviceState = STATE_IDLE_DASHBOARD;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-    }
-}
-
-// ─── Interactive Serial Simulator ───────────────────────────────────────────
 void handleSerialCommands() {
     if (!Serial.available()) return;
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
     if (cmd.length() == 0) return;
 
-    Serial.printf("\n[CMD] Received: '%s'\n", cmd.c_str());
-
-    if (cmd == "help") {
-        Serial.println("\n--- T-Dongle S3 Security Key & Crypto Vault Commands ---");
-        Serial.println("  setup:web                - Launch Web Captive Portal ('T-Key-Setup' AP at 192.168.4.1)");
-        Serial.println("  setup:reset              - Reset vault provisioning and launch Web Setup Portal");
-        Serial.println("  prices                   - Display live cryptocurrency prices on TFT screen");
-        Serial.println("  wallet:status            - Display all cryptocurrency addresses & paths");
-        Serial.println("  wallet:addr:<btc|eth|sol>- View specific coin address on TFT screen");
-        Serial.println("  wallet:seed              - Display BIP-39 mnemonic seed phrase");
-        Serial.println("  auth:<domain>            - Trigger WebAuthn Passkey request (e.g. auth:github.com)");
-        Serial.println("  sign:<addr>:<amt>        - Trigger Clear-Sign Crypto prompt (e.g. sign:0x123:0.5ETH)");
-        Serial.println("  wifi:scan                - Scan nearby 2.4GHz Wi-Fi networks");
-        Serial.println("  wifi:add:<ssid>:<pass>   - Store Wi-Fi credentials to persistent flash");
-        Serial.println("  wifi:connect             - Connect to best stored Wi-Fi network");
-        Serial.println("  wifi:status              - Display Wi-Fi connection info & IP");
-        Serial.println("  wifi:list                - List all stored Wi-Fi SSIDs");
-        Serial.println("  wifi:clear               - Erase all stored Wi-Fi credentials");
-        Serial.println("  led:<amber|cyan|green|blue|purple|red|off> - Test status LED modes");
-        Serial.println("  rgb:<r>:<g>:<b>          - Set raw RGB values (0-255)");
-        Serial.println("  lock                     - Lock vault back to PIN entry");
-        Serial.println("  unlock                   - Instant unlock for bench testing");
-        Serial.println("  duress                   - Trigger emergency flash wipe + decoy crash");
-        Serial.println("  status                   - Print current device state");
-        Serial.println("---------------------------------------------------------\n");
-    }
-    else if (cmd == "setup:web" || cmd == "setup:reset") {
-        Preferences vaultPrefs;
-        vaultPrefs.begin("vault_sec", false);
-        vaultPrefs.putBool("provisioned", false);
-        vaultPrefs.end();
-        loadSecurityConfig();
-    }
-    else if (cmd == "prices") {
-        deviceState = STATE_CRYPTO_PRICES;
-        ticker->fetchPricesNow();
-        ui.renderCryptoPrices(ticker->getBtcPrice(), ticker->getEthPrice(), ticker->getSolPrice(), ticker->getDogePrice(), ticker->isLive());
-        Serial.println("[PRICES] Rendered live market ticker on screen.");
-    }
-    else if (cmd.startsWith("auth:")) {
-        strncpy(reqDomain, cmd.substring(5).c_str(), sizeof(reqDomain) - 1);
-        deviceState = STATE_FIDO_AUTH_REQUEST;
-        rgb.setMode(LED_MODE_PULSE_GREEN);
-        ui.renderFidoRequest(reqDomain);
-        Serial.printf("[FIDO2] WebAuthn request rendered for '%s'. Tap button to confirm!\n", reqDomain);
-    }
-    else if (cmd.startsWith("sign:")) {
-        int firstColon = cmd.indexOf(':');
-        int secondColon = cmd.indexOf(':', firstColon + 1);
-        if (secondColon > 0) {
-            strncpy(reqRecipient, cmd.substring(firstColon + 1, secondColon).c_str(), sizeof(reqRecipient) - 1);
-            strncpy(reqAmount, cmd.substring(secondColon + 1).c_str(), sizeof(reqAmount) - 1);
+    if (cmd.equalsIgnoreCase("help")) {
+        Serial.println("\n--- Crypto TKey S3 CLI ---");
+        Serial.println("  status       - Print security key status & uptime");
+        Serial.println("  setpin <PIN> - Set 4-digit master PIN");
+        Serial.println("  panic        - Trigger emergency flash nuke");
+        Serial.println("  addresses    - Print derived cryptocurrency addresses");
+    } else if (cmd.equalsIgnoreCase("status")) {
+        Serial.printf("Uptime: %lus | CPU: %dMHz | Vault: %s | Master PIN: %s\n",
+            millis() / 1000, getCpuFrequencyMhz(), wallet->isUnlocked() ? "UNLOCKED" : "LOCKED", masterPin);
+    } else if (cmd.startsWith("setpin ")) {
+        String newPin = cmd.substring(7);
+        newPin.trim();
+        if (newPin.length() == PIN_LENGTH) {
+            strncpy(masterPin, newPin.c_str(), PIN_LENGTH);
+            vaultPrefs.begin("vault_sec", false);
+            vaultPrefs.putString("user_pin", masterPin);
+            vaultPrefs.end();
+            Serial.printf("Master PIN successfully changed to: %s\n", masterPin);
         } else {
-            strncpy(reqRecipient, cmd.substring(firstColon + 1).c_str(), sizeof(reqRecipient) - 1);
-            strncpy(reqAmount, "0.100 ETH", sizeof(reqAmount) - 1);
+            Serial.println("Error: PIN must be exactly 4 digits.");
         }
-        deviceState = STATE_CRYPTO_SIGN_REQUEST;
-        wallet->prepareSignRequest(COIN_ETH, reqRecipient, reqAmount);
-        rgb.setMode(LED_MODE_PULSE_GREEN);
-        ui.renderCryptoSignRequest("Ethereum Mainnet", reqRecipient, reqAmount);
-        Serial.printf("[SIGNER] Clear-Sign prompt rendered. Recipient: %s, Amount: %s. Hold button to sign!\n", reqRecipient, reqAmount);
-    }
-    else if (cmd == "wallet:status") {
-        Serial.println("\n--- Multi-Currency Vault Accounts ---");
-        for (int i = 0; i < COIN_COUNT; i++) {
-            const WalletAccount* acc = wallet->getAccount((CryptoCoin)i);
-            Serial.printf("  [%s] %-16s | Path: %-16s | Addr: %s\n",
-                          acc->symbol, acc->name, acc->derivationPath, acc->address);
-        }
-        Serial.printf("Vault Status: %s | Master PIN: %s\n\n", wallet->isUnlocked() ? "UNLOCKED" : "LOCKED", masterPin);
-    }
-    else if (cmd.startsWith("wallet:addr:")) {
-        String coinStr = cmd.substring(12);
-        coinStr.toLowerCase();
-        CryptoCoin c = COIN_BTC;
-        if (coinStr == "eth") c = COIN_ETH;
-        else if (coinStr == "sol") c = COIN_SOL;
-        else if (coinStr == "doge") c = COIN_DOGE;
-
-        deviceState = STATE_WALLET_VIEW;
-        currentViewCoin = c;
-        const WalletAccount* acc = wallet->getAccount(c);
-        ui.renderWalletScreen(acc->name, acc->symbol, acc->derivationPath, acc->address);
-        Serial.printf("[WALLET] Displaying %s address on screen: %s\n", acc->name, acc->address);
-    }
-    else if (cmd == "wallet:seed") {
-        Serial.printf("[WALLET] BIP-39 Mnemonic Seed:\n  \"%s\"\n", wallet->getMnemonicPhrase());
-    }
-    else if (cmd.startsWith("wifi:add:")) {
-        int firstColon = cmd.indexOf(':', 5);
-        int secondColon = cmd.indexOf(':', firstColon + 1);
-        if (secondColon > 0) {
-            String ssid = cmd.substring(firstColon + 1, secondColon);
-            String pass = cmd.substring(secondColon + 1);
-            wifi->addNetwork(ssid.c_str(), pass.c_str());
-        } else {
-            String ssid = cmd.substring(firstColon + 1);
-            wifi->addNetwork(ssid.c_str(), "");
-        }
-    }
-    else if (cmd == "wifi:scan") {
-        wifi->scanNetworks();
-    }
-    else if (cmd == "wifi:connect") {
-        wifi->connectBest();
-    }
-    else if (cmd == "wifi:status") {
-        Serial.printf("[WIFI] Status: %s | SSID: %s | IP: %s | RSSI: %d dBm | Saved: %d\n",
-                      wifi->isConnected() ? "CONNECTED" : "DISCONNECTED",
-                      wifi->getSsid().c_str(), wifi->getIp().c_str(), wifi->getRssi(), wifi->getSavedCount());
-    }
-    else if (cmd == "wifi:list") {
-        Serial.printf("\n--- Stored Wi-Fi Networks (%d) ---\n", wifi->getSavedCount());
-        for (int i = 0; i < wifi->getSavedCount(); i++) {
-            Serial.printf("  [%d] %s\n", i + 1, wifi->getSavedSsid(i));
-        }
-        Serial.println();
-    }
-    else if (cmd == "wifi:clear") {
-        wifi->clearAll();
-    }
-    else if (cmd.startsWith("led:")) {
-        String m = cmd.substring(4);
-        if (m == "amber")       { rgb.setMode(LED_MODE_SOLID_AMBER); Serial.println("[LED] Mode: SOLID_AMBER"); }
-        else if (m == "cyan")   { rgb.setMode(LED_MODE_BREATHE_CYAN); Serial.println("[LED] Mode: BREATHE_CYAN"); }
-        else if (m == "green")  { rgb.setMode(LED_MODE_PULSE_GREEN); Serial.println("[LED] Mode: PULSE_GREEN"); }
-        else if (m == "blue")   { rgb.setMode(LED_MODE_SOLID_BLUE); Serial.println("[LED] Mode: SOLID_BLUE"); }
-        else if (m == "purple") { rgb.setMode(LED_MODE_PULSE_PURPLE); Serial.println("[LED] Mode: PULSE_PURPLE"); }
-        else if (m == "red")    { rgb.setMode(LED_MODE_STROBE_RED); Serial.println("[LED] Mode: STROBE_RED"); }
-        else if (m == "off")    { rgb.setMode(LED_MODE_OFF); Serial.println("[LED] Mode: OFF"); }
-        else { Serial.println("[LED] Unknown mode. Use: amber, cyan, green, blue, purple, red, off"); }
-    }
-    else if (cmd.startsWith("rgb:")) {
-        int c1 = cmd.indexOf(':');
-        int c2 = cmd.indexOf(':', c1 + 1);
-        int c3 = cmd.indexOf(':', c2 + 1);
-        if (c2 > 0 && c3 > 0) {
-            uint8_t r = cmd.substring(c1 + 1, c2).toInt();
-            uint8_t g = cmd.substring(c2 + 1, c3).toInt();
-            uint8_t b = cmd.substring(c3 + 1).toInt();
-            rgb.setPixel(r, g, b, 4);
-            Serial.printf("[LED] Set Raw RGB: (%d, %d, %d)\n", r, g, b);
-        }
-    }
-    else if (cmd == "lock") {
-        deviceState = STATE_LOCKED;
-        resetPinEntry();
-        wallet->lock();
-        rgb.setMode(LED_MODE_SOLID_AMBER);
-        ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
-        Serial.println("[VAULT] Device locked.");
-    }
-    else if (cmd == "unlock") {
-        deviceState = STATE_IDLE_DASHBOARD;
-        wallet->unlock(masterPin);
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
-        Serial.println("[VAULT] Bypassed lock: Dashboard active.");
-    }
-    else if (cmd == "duress") {
-        Serial.println("[SECURITY] Triggering DURESS wipe from console!");
-        DuressWipe::execute(*tft, rgb, "SERIAL_DURESS");
-    }
-    else if (cmd == "status") {
-        Serial.printf("[STATUS] State: %d | Uptime: %lus | Wi-Fi: %s (%s) | PIN: %s\n",
-                      deviceState, millis() / 1000,
-                      wifi->isConnected() ? "CONNECTED" : "OFFLINE",
-                      wifi->getIp().c_str(), masterPin);
-    }
-    else {
-        Serial.printf("[CMD] Unknown command '%s'. Type 'help' for available commands.\n", cmd.c_str());
+    } else if (cmd.equalsIgnoreCase("panic")) {
+        DuressWipe::execute(*tft, rgb, "SERIAL_PANIC");
+    } else if (cmd.equalsIgnoreCase("addresses")) {
+        Serial.printf("BTC  : %s\n", wallet->getAddress(COIN_BTC));
+        Serial.printf("ETH  : %s\n", wallet->getAddress(COIN_ETH));
+        Serial.printf("SOL  : %s\n", wallet->getAddress(COIN_SOL));
+        Serial.printf("DOGE : %s\n", wallet->getAddress(COIN_DOGE));
     }
 }
