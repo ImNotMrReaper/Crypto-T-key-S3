@@ -34,8 +34,8 @@ RESET = "\033[0m"
 
 APP_NAME = "Antigravity Security Key Forge"
 APP_VERSION = "1.0.0"
-PROJECT_DIR = Path("/home/mr-reaper/Arduino Projects/tdongle-s3-security-key")
-MAIN_SKETCH = PROJECT_DIR / "tdongle-s3-security-key.ino"
+PROJECT_DIR = Path(__file__).resolve().parent
+MAIN_SKETCH = PROJECT_DIR / f"{PROJECT_DIR.name}.ino"
 ARDUINO_CLI = shutil.which("arduino-cli") or str(Path.home() / ".local" / "bin" / "arduino-cli")
 
 TDONGLE_S3_FQBN = "esp32:esp32:esp32s3"

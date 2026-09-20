@@ -42,7 +42,8 @@ __attribute__((constructor(101))) void pre_init_early() {
 #include "src/crypto_wallet.h"
 #include "src/wifi_manager.h"
 #include "src/price_ticker.h"
-#include "src/fido2_ctaphid.h"
+#include "src/ctaphid.h"
+#include "src/ctap2.h"
 #include "src/web_portal.h"
 
 // ─── Hardware & Subsystem Pointers (Zero Static Constructor Overhead) ────────
@@ -53,7 +54,6 @@ UiEngine      ui;
 CryptoWallet* wallet = nullptr;
 WifiManager*  wifi   = nullptr;
 PriceTicker*  ticker = nullptr;
-Fido2Ctaphid* fido   = nullptr;
 WebPortal*    portal = nullptr;
 
 // ─── Global State ────────────────────────────────────────────────────────────
@@ -87,6 +87,7 @@ void processAirGapState(ButtonEvent ev);
 void processBleState(ButtonEvent ev);
 void resetPinEntry();
 void loadSecurityConfig();
+bool handleUserPresencePrompt(const char* rpId, bool isRegistration);
 
 // ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
@@ -94,7 +95,6 @@ void setup() {
     setCpuFrequencyMhz(160);
 
     Serial.begin(115200);
-    Serial.setTxTimeoutMs(0); // Non-blocking: never stall if host hasn't opened port
     delay(1500); // Allow USB CDC enumeration and host driver to attach
 
     Serial.println("\n[BOOT] ===== T-KEY S3 BOOT SEQUENCE =====");
@@ -134,9 +134,10 @@ void setup() {
     ticker->begin();
     Serial.println("[BOOT] CHECKPOINT 8: Price Ticker OK");
 
-    fido   = new Fido2Ctaphid();
-    fido->begin();
-    Serial.println("[BOOT] CHECKPOINT 9: FIDO2 CTAPHID OK");
+    ctapHid.begin();
+    ctap2Engine.begin();
+    ctap2Engine.setUserPresencePrompt(handleUserPresencePrompt);
+    Serial.println("[BOOT] CHECKPOINT 9: FIDO2 CTAP2 & CTAPHID Engine OK");
 
     portal = new WebPortal();
     Serial.println("[BOOT] CHECKPOINT 10: Web Portal Allocated");

@@ -1,19 +1,25 @@
-# ⚡ T-Dongle S3 Security Key & Crypto Vault (007 Edition) 🛡️
+# ⚡ Crypto TKey S3 — Hardware Security Key & Offline Crypto Vault 🛡️
 
-> **"A James Bond-style hardware security key, WebAuthn authenticator, and crypto clear-signer on a $15 thumb drive."**
+**Crypto TKey S3** (formerly `tdongle-s3-security-key`) is a James Bond-style FIDO2/WebAuthn hardware security key, offline cryptocurrency transaction clear-signer, and air-gapped vault powered by the **LilyGo T-Dongle S3** (`ESP32-S3`).
 
 ---
 
-## 📌 Architectural Overview
+## 🔐 Core Capabilities
 
-This firmware turns the **LilyGo T-Dongle S3** into an all-in-one personal hardware security device:
-- **Instant WebAuthn / Passkeys:** Authenticates GitHub, Google, Bitwarden, etc. Displays the origin domain on the 0.96" TFT and requires a physical button press to confirm User Presence (UP).
-- **Crypto Clear-Signer (WYSIWYS):** Prevents blind-signing attacks by rendering the recipient address, network, and transfer amount on-screen before cryptographic signing.
-- **Single-Button Cadence Input:** Full PIN entry and menu navigation using Morse-style cadence (Short press: +1 / Next, Long press: Confirm / OK, Double click: Backspace / Cancel).
-- **Emergency Duress Self-Destruct:** Entering the alternate Duress PIN (`9999`) or holding the physical button for >6 seconds immediately zeroizes flash memory, erases NVS keystore partitions, and triggers a decoy low-level kernel panic screen.
-- **WS2812 Status Beacon:** Stealth visual feedback (Amber = Locked, Breathing Cyan = Ready, Pulsing Green = Awaiting physical tap, Red Strobe = Wiped).
-- **MicroSD Air-Gapped Signer:** Offline PSBT (Partially Signed Bitcoin Transactions) parsing and signing when powered via a portable battery pack.
-- **BLE Companion Mode:** Mobile phone authentication and transaction approval over Bluetooth Low Energy.
+- **FIDO2 / WebAuthn Passkeys:** True CTAP2 over USB HID (`0xF1D0`) for Google, GitHub, Bitwarden, and Linux PAM. Displays relying party origin on the 0.96" TFT LCD and requires physical touch (User Presence) to approve.
+- **Dynamic Mode-Switched USB:**
+  - *Normal Plug-in:* Pure FIDO2 CTAPHID (stealth, zero serial ports exposed).
+  - *Boot-Hold Plug-in:* Composite CTAPHID + CDC Serial console on `/dev/ttyACM0` for live diagnostics.
+- **Tiered Security Lifecycle:**
+  - *Tier 1 (Web Logins):* Ready state (Cyan LED) with 1-tap touch (no PIN fatigue).
+  - *Tier 2 (Crypto & UV):* Master PIN gate (Amber LED) unlocking a 3-minute signing window.
+- **Crypto Clear-Signer (WYSIWYS):** What You See Is What You Sign on Bitcoin, Ethereum, and Solana.
+- **Air-Gapped MicroSD Signer:** Offline PSBT parsing and signing with zero RF radiation.
+- **Smart Air-Gap Ticker:** 0 RF on PC (host-streamed prices); Wi-Fi burst mode exclusively when plugged into wall power.
+- **Tri-Level Coercion & Anti-Tamper:**
+  - *Level 1:* Plausible deniability decoy PIN (`8888`) unlocking secondary decoy wallet.
+  - *Level 2:* Panic hold (>5.5s) flash scrub + authentic Guru Meditation crash decoy.
+  - *Level 3:* Anti-hammering auto-nuke after 10 failed PIN attempts.
 
 ---
 
@@ -21,54 +27,28 @@ This firmware turns the **LilyGo T-Dongle S3** into an all-in-one personal hardw
 
 | Component | Pin | Function |
 | :--- | :--- | :--- |
-| **TFT CS** | GPIO 4 | SPI Chip Select |
+| **TFT CS** | GPIO 4 | SPI Chip Select (`SPI3_HOST`) |
 | **TFT DC** | GPIO 2 | Data / Command |
 | **TFT RST** | GPIO 1 | Hardware Reset |
 | **TFT MOSI** | GPIO 3 | SPI Master Out |
 | **TFT SCLK** | GPIO 5 | SPI Clock |
-| **TFT BL** | GPIO 38 | Backlight Enable (Active High) |
+| **TFT BL** | GPIO 38 | Backlight Enable (**Active LOW**) |
 | **RGB LED** | GPIO 40 | WS2812 Single Pixel |
-| **BOOT BTN** | GPIO 0 | Active Low (Internal Pull-up) |
+| **BOOT BTN** | GPIO 0 | Active LOW User Input |
 | **SD CLK** | GPIO 12 | SD_MMC 1-Bit Clock |
 | **SD CMD** | GPIO 16 | SD_MMC Command |
 | **SD D0** | GPIO 17 | SD_MMC Data 0 |
 
 ---
 
-## 🕹️ Single-Button Cadence Controls
+## 🕹️ Single-Button Morse Cadence Controls
 
 | Gesture | Timing | Action |
 | :--- | :--- | :--- |
-| **Short Press (Tap)** | `< 650ms` | Increment PIN digit (`+1`) / Next option (Instant on release) |
-| **Long Press (Hold)** | `650ms – 2200ms` | Confirm digit / Commit transaction / OK |
-| **Very Long Press (Hold)** | `2200ms – 5500ms` | Backspace / Lock device / Cancel / Reject |
-| **Panic Hold** | `> 5500ms` | **Instant Flash Zeroization & Decoy Crash** |
-
----
-
-## 🚨 PIN & Duress System
-
-- **Default Master PIN:** `1234` (Enters normal unlocked state & dashboard)
-- **Emergency Duress PIN:** `9999` (Wipes NVS keystores, flashes red, shows decoy kernel panic)
-
----
-
-## 💻 Interactive Serial Simulation Console
-
-When connected via USB CDC, open the Serial Monitor (`115200` baud) or run `make monitor`:
-
-```bash
-# Available Commands
-auth:github.com            # Trigger WebAuthn Passkey prompt for github.com
-sign:0x71C...89E2:0.5ETH   # Trigger Clear-Sign crypto prompt
-sd                         # Simulate MicroSD PSBT air-gapped transaction
-ble                        # Switch to BLE phone companion mode
-lock                       # Lock device back to PIN entry
-unlock                     # Instant bench-test unlock
-duress                     # Execute emergency panic wipe & decoy crash
-status                     # Print device state & uptime
-help                       # Display help menu
-```
+| **Short Tap** | < 650ms | Increment PIN digit (+1) / Next option |
+| **Long Press** | 650ms – 2200ms | Confirm digit / Commit transaction / Approve UP |
+| **Extended Hold** | 2200ms – 5500ms | Backspace / Cancel / Lock device |
+| **Panic Hold** | > 5500ms | Instant Flash Scrub & Guru Meditation Decoy Crash |
 
 ---
 
@@ -81,9 +61,9 @@ make compile
 # Flash to T-Dongle S3
 make flash
 
-# Open Serial Monitor
+# Open Serial Monitor (when diagnostic boot is active)
 make monitor
 
-# Show Pinout
+# Show Hardware Pinout
 make pins
 ```
