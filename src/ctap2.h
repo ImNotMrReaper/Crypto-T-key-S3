@@ -42,7 +42,7 @@ public:
     void handleCborRequest(uint32_t cid, const uint8_t* req, uint16_t reqLen);
 
     // Callbacks to UI and Button verification
-    typedef bool (*UserPresencePrompt)(const char* rpId, bool isRegistration);
+    typedef bool (*UserPresencePrompt)(uint32_t cid, const char* rpId, bool isRegistration);
     void setUserPresencePrompt(UserPresencePrompt prompt) { _upPrompt = prompt; }
 
 private:

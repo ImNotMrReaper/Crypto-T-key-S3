@@ -211,28 +211,28 @@ bool CryptoWallet::executeSign(char* outSigHex, size_t maxLen) {
     sha.finalize(txHash, sizeof(txHash));
 
     if (c == COIN_SOL) {
-        // Sign via Ed25519 (64-byte signature)
+        // Sign via Ed25519 (64-byte signature: R [32] || S [32])
         uint8_t signature[64];
         Ed25519::sign(signature, _accounts[c].privKey, _accounts[c].pubKey, txHash, sizeof(txHash));
 
-        if (outSigHex && maxLen > 128) {
-            for (int i = 0; i < 32; i++) {
+        if (outSigHex && maxLen >= 129) {
+            for (int i = 0; i < 64; i++) {
                 snprintf(outSigHex + (i * 2), maxLen - (i * 2), "%02x", signature[i]);
             }
-            outSigHex[64] = '\0';
+            outSigHex[128] = '\0';
         }
         secureZero(signature, sizeof(signature));
     } else {
-        // Sign via secp256k1 ECDSA (64-byte r, s signature)
+        // Sign via secp256k1 ECDSA (64-byte signature: r [32] || s [32])
         uint8_t signature[64];
         uECC_Curve curve = uECC_secp256k1();
         uECC_sign(_accounts[c].privKey, txHash, sizeof(txHash), signature, curve);
 
-        if (outSigHex && maxLen > 64) {
-            for (int i = 0; i < 32; i++) {
+        if (outSigHex && maxLen >= 129) {
+            for (int i = 0; i < 64; i++) {
                 snprintf(outSigHex + (i * 2), maxLen - (i * 2), "%02x", signature[i]);
             }
-            outSigHex[64] = '\0';
+            outSigHex[128] = '\0';
         }
         secureZero(signature, sizeof(signature));
     }

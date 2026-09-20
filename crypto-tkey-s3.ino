@@ -65,7 +65,7 @@ void processPinEntryState(ButtonEvent ev);
 void processVaultDashboardState(ButtonEvent ev);
 void resetPinEntry();
 void loadSecurityConfig();
-bool handleUserPresencePrompt(const char* rpId, bool isRegistration);
+bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistration);
 
 // ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
@@ -270,7 +270,7 @@ void processVaultDashboardState(ButtonEvent ev) {
 }
 
 // ─── FIDO2 / WebAuthn User Presence Prompt Callback ─────────────────────────
-bool handleUserPresencePrompt(const char* rpId, bool isRegistration) {
+bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistration) {
     PowerManager::wakeDisplay();
     if (rpId && strlen(rpId) > 0) {
         strncpy(reqDomain, rpId, sizeof(reqDomain) - 1);
@@ -280,9 +280,11 @@ bool handleUserPresencePrompt(const char* rpId, bool isRegistration) {
     deviceState = STATE_FIDO_AUTH_PROMPT;
     rgb.setMode(LED_MODE_PULSE_GREEN);
     ui.renderFidoPrompt(reqDomain, 1.0f);
-    Serial.printf("[FIDO2] Prompting User Presence for '%s' (Registration: %s)\n", reqDomain, isRegistration ? "YES" : "NO");
+    Serial.printf("[FIDO2] Prompting User Presence for '%s' (Registration: %s, CID: 0x%08X)\n",
+                  reqDomain, isRegistration ? "YES" : "NO", cid);
 
     uint32_t start = millis();
+    uint32_t lastKeepAlive = 0;
     bool confirmed = false;
     bool done = false;
 
@@ -291,6 +293,12 @@ bool handleUserPresencePrompt(const char* rpId, bool isRegistration) {
         rgb.update();
         ctapHid.process();
         handleSerialCommands();
+
+        // Send FIDO2 CTAPHID Keepalive (UP Needed) every 250ms to keep host browser active
+        if (millis() - lastKeepAlive >= 250) {
+            ctapHid.sendKeepAlive(cid, CTAPHID_STATUS_UPNEEDED);
+            lastKeepAlive = millis();
+        }
 
         float remaining = 1.0f - ((float)(millis() - start) / 30000.0f);
         ui.renderFidoPrompt(reqDomain, remaining);

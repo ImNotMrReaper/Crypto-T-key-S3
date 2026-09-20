@@ -230,11 +230,13 @@ bool CborDecoder::skipValueInternal(size_t depth) {
             _offset += (size_t)val;
             return true;
         case 4: // Array
+            if (val > (_len - _offset)) return false; // An array cannot have more elements than remaining bytes
             for (size_t i = 0; i < val; i++) {
                 if (!skipValueInternal(depth + 1)) return false;
             }
             return true;
         case 5: // Map (key + value pairs)
+            if (val > (_len - _offset) / 2) return false; // A map requires at least 2 bytes per key-value pair
             for (size_t i = 0; i < val * 2; i++) {
                 if (!skipValueInternal(depth + 1)) return false;
             }

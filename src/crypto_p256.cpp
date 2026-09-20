@@ -199,6 +199,16 @@ bool CryptoP256::signDigest(const uint8_t* privKey, const uint8_t* digest, uint8
         return false;
     }
 
+    // Low-S normalization (RFC canonical non-malleability: if s > N/2, then s = N - s)
+    mbedtls_mpi halfN;
+    mbedtls_mpi_init(&halfN);
+    if (mbedtls_mpi_copy(&halfN, &grp.N) == 0 && mbedtls_mpi_shift_r(&halfN, 1) == 0) {
+        if (mbedtls_mpi_cmp_mpi(&s, &halfN) > 0) {
+            mbedtls_mpi_sub_mpi(&s, &grp.N, &s);
+        }
+    }
+    mbedtls_mpi_free(&halfN);
+
     // Export raw r and s integers
     uint8_t rRaw[32], sRaw[32];
     mbedtls_mpi_write_binary(&r, rRaw, 32);
@@ -241,6 +251,9 @@ bool CryptoP256::signDigest(const uint8_t* privKey, const uint8_t* digest, uint8
 
     *sigLen = (p - sigOutDer);
 
+    // Secure zeroize stack buffers and free MPIs
+    mbedtls_platform_zeroize(rRaw, sizeof(rRaw));
+    mbedtls_platform_zeroize(sRaw, sizeof(sRaw));
     mbedtls_mpi_free(&r);
     mbedtls_mpi_free(&s);
     mbedtls_mpi_free(&d);

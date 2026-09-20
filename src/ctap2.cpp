@@ -1,6 +1,7 @@
 #include "ctap2.h"
 #include "ctaphid.h"
 #include <string.h>
+#include <mbedtls/platform_util.h>
 
 Ctap2Engine ctap2Engine;
 
@@ -164,7 +165,7 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
     }
 
     // Physical User Presence Verification (UP) - Fail Closed
-    if (!_upPrompt || !_upPrompt(rpId, true)) {
+    if (!_upPrompt || !_upPrompt(cid, rpId, true)) {
         uint8_t err = CTAP2_ERR_OPERATION_DENIED;
         ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
         return;
@@ -177,6 +178,7 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
 
     uint8_t pubKeyRaw[64]; // X (32) || Y (32)
     cryptoP256.generateKeypair(privKey, pubKeyRaw);
+    mbedtls_platform_zeroize(privKey, sizeof(privKey)); // Clean zeroize immediately after keygen
 
     // 2. Build COSE Public Key
     uint8_t coseKey[128];
@@ -315,7 +317,8 @@ void Ctap2Engine::handleGetAssertion(uint32_t cid, CborDecoder& dec) {
     }
 
     // Physical User Presence Verification (UP) - Fail Closed
-    if (!_upPrompt || !_upPrompt(rpId, false)) {
+    if (!_upPrompt || !_upPrompt(cid, rpId, false)) {
+        mbedtls_platform_zeroize(privKey, sizeof(privKey));
         uint8_t err = CTAP2_ERR_OPERATION_DENIED;
         ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
         return;
@@ -342,7 +345,10 @@ void Ctap2Engine::handleGetAssertion(uint32_t cid, CborDecoder& dec) {
 
     uint8_t sigDer[72];
     size_t sigLen = 0;
-    if (!cryptoP256.signDigest(privKey, digest, sigDer, &sigLen)) {
+    bool signOk = cryptoP256.signDigest(privKey, digest, sigDer, &sigLen);
+    mbedtls_platform_zeroize(privKey, sizeof(privKey)); // Clean zeroize private key immediately after signing
+
+    if (!signOk) {
         uint8_t err = CTAP2_ERR_OTHER;
         ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
         return;
