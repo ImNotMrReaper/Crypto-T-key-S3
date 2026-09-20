@@ -37,10 +37,16 @@ static USBHID HID;
 
 class FidoHidDevice : public USBHIDDevice {
 public:
-    FidoHidDevice() {}
+    FidoHidDevice() {
+        static bool initialized = false;
+        if (!initialized) {
+            initialized = true;
+            HID.addDevice(this, fido_hid_report_descriptor_len);
+        }
+    }
 
     void begin() {
-        HID.addDevice(this, fido_hid_report_descriptor_len);
+        HID.begin();
     }
 
     uint16_t _onGetDescriptor(uint8_t* dst) override {
@@ -68,11 +74,10 @@ void CtapHid::begin(bool diagnosticMode) {
     _diagnosticMode = diagnosticMode;
 
     fidoDev.begin();
-    HID.begin();
     
     // Start USB
     USB.VID(0x303A); // Espressif
-    USB.PID(0x1001);
+    USB.PID(0x4001); // Unique PID for Crypto TKey S3 FIDO Authenticator
     USB.productName("Crypto TKey S3 Authenticator");
     USB.manufacturerName("Reaper Security Systems");
     USB.serialNumber("TKEY-S3-007");

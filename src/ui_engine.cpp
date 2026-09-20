@@ -197,22 +197,53 @@ void UiEngine::renderWalletScreen(const char* coinName, const char* symbol, cons
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
-    drawHeader(coinName, COLOR_HEADER_BG, COLOR_NEON_CYAN);
+    // Determine coin-specific branding color
+    uint16_t coinColor = COLOR_NEON_CYAN;
+    if (strstr(symbol, "BTC")) coinColor = COLOR_CYBER_GOLD;       // 0xFD80 Gold
+    else if (strstr(symbol, "ETH")) coinColor = 0x9B1F;           // Royal Violet
+    else if (strstr(symbol, "SOL")) coinColor = 0x17EE;           // Neon Turquoise
+    else if (strstr(symbol, "DOGE")) coinColor = 0xFE00;          // Doge Sunny Yellow
 
-    char addrTrunc[18];
-    truncateAddress(address, addrTrunc, sizeof(addrTrunc));
+    // Vibrant header with colored bar
+    drawHeader(coinName, 0x0008, coinColor);
 
+    // Top metadata row: Coin Badge Pill (Left) & Derivation Path (Right)
+    _sprite->fillRoundRect(4, 16, 42, 11, 2, coinColor);
     _sprite->setTextDatum(MC_DATUM);
-    _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
-    _sprite->drawString(symbol, DISP_W / 2, 26, 2);
+    _sprite->setTextColor(0x0000, coinColor);
+    _sprite->drawString(symbol, 25, 21, 1);
 
-    _sprite->setTextColor(0xFFFF, COLOR_BG);
-    _sprite->drawString(addrTrunc, DISP_W / 2, 42, 1);
+    _sprite->setTextDatum(TR_DATUM);
+    _sprite->setTextColor(0x8410, COLOR_BG);
+    _sprite->drawString(path, 156, 17, 1);
 
-    _sprite->setTextColor(0x7BEF, COLOR_BG);
-    _sprite->drawString(path, DISP_W / 2, 54, 1);
+    // Address Display Card (Y: 29..64)
+    // Dark background card with coin-colored left stripe
+    _sprite->fillRoundRect(4, 29, DISP_W - 8, 35, 3, 0x0842);
+    _sprite->fillRoundRect(4, 29, 3, 35, 1, coinColor);
 
-    drawFooter("[●] TAP: NEXT  [■] HOLD: LOCK", 0, 0.0f);
+    _sprite->setTextDatum(TL_DATUM);
+    _sprite->setTextColor(0xFFFF, 0x0842);
+
+    size_t addrLen = address ? strlen(address) : 0;
+    if (addrLen <= 23) {
+        _sprite->drawString(address ? address : "No Address", 11, 41, 1);
+    } else {
+        // Split cleanly across 2 lines for 100% full address readability
+        char line1[26];
+        char line2[32];
+        size_t split = (addrLen > 22) ? 22 : addrLen;
+        strncpy(line1, address, split);
+        line1[split] = '\0';
+        strncpy(line2, address + split, sizeof(line2) - 1);
+        line2[sizeof(line2) - 1] = '\0';
+
+        _sprite->drawString(line1, 11, 34, 1);
+        _sprite->setTextColor(0xDEFB, 0x0842);
+        _sprite->drawString(line2, 11, 48, 1);
+    }
+
+    drawFooter("[●] TAP: NEXT COIN  [■] HOLD: LOCK", 0, 0.0f);
 
     _sprite->pushSprite(0, 0);
 }
@@ -221,9 +252,15 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
+    uint16_t coinColor = COLOR_NEON_CYAN;
+    if (strstr(symbol, "BTC")) coinColor = COLOR_CYBER_GOLD;
+    else if (strstr(symbol, "ETH")) coinColor = 0x9B1F;
+    else if (strstr(symbol, "SOL")) coinColor = 0x17EE;
+    else if (strstr(symbol, "DOGE")) coinColor = 0xFE00;
+
     char hdr[32];
     snprintf(hdr, sizeof(hdr), "%s (%d/%d) // TRACKER", symbol, activeIdx + 1, totalActive);
-    drawHeader(hdr, COLOR_HEADER_BG, COLOR_NEON_CYAN);
+    drawHeader(hdr, 0x0008, coinColor);
 
     // Primary Content Zone (Y: 14..65)
     _sprite->setTextDatum(TL_DATUM);
@@ -241,7 +278,7 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
     // USD Price & 24h change
     char priceStr[32];
     snprintf(priceStr, sizeof(priceStr), "$%.2f", priceUsd);
-    _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
+    _sprite->setTextColor(coinColor, COLOR_BG);
     _sprite->drawString(priceStr, 8, 36, 1);
 
     char chgStr[16];
@@ -258,10 +295,11 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
 
     char totStr[32];
     snprintf(totStr, sizeof(totStr), "TOT: $%.0f", totalPortfolioUsd);
-    _sprite->setTextColor(0x7BEF, COLOR_BG);
+    _sprite->setTextColor(0xAD55, COLOR_BG);
     _sprite->drawString(totStr, 95, 50, 1);
 
-    drawFooter("[●] TAP: NEXT  [■] HOLD: BACK", 0, 0.0f);
+    drawFooter("[●] NEXT  [▲] DBL: PREV  [■] HOLD: EXIT", 0, 0.0f);
+
     _sprite->pushSprite(0, 0);
 }
 

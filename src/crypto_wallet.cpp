@@ -48,7 +48,9 @@ void CryptoWallet::begin() {
     _accounts[COIN_DOGE].symbol = "DOGE";
     _accounts[COIN_DOGE].name = "Dogecoin";
     _accounts[COIN_DOGE].derivationPath = "m/44'/3'/0'/0/0";
-    strncpy(_accounts[COIN_DOGE].address, "D8vK2eQ9...mY7a", sizeof(_accounts[COIN_DOGE].address) - 1);
+    
+    // Derive real BIP-32/BIP-84/EIP-55 addresses immediately from master seed
+    deriveAllAccounts();
 }
 
 bool CryptoWallet::unlock(const char* pin) {
@@ -99,90 +101,84 @@ const char* CryptoWallet::getCoinName(CryptoCoin coin) const {
     return "";
 }
 
+#include "bip32_engine.h"
+#include "crypto_coins.h"
+#include "mbedtls/sha256.h"
+#include "mbedtls/ripemd160.h"
+
 // ─── Deterministic Key & Address Derivation ──────────────────────────────────
 void CryptoWallet::deriveAllAccounts() {
-    // Derive deterministic root seed from mnemonic via SHA256/SHA512
-    SHA256 sha;
-    sha.update((const uint8_t*)_mnemonic, strlen(_mnemonic));
-    uint8_t rootHash[32];
-    sha.finalize(rootHash, sizeof(rootHash));
+    // 1. Compute standard 64-byte BIP-39 binary seed from mnemonic
+    Bip32Engine::mnemonicToSeed(_mnemonic, "", _masterSeed);
 
-    // Populate coin-specific keys
-    for (int i = 0; i < COIN_COUNT; i++) {
-        uint8_t coinId = (uint8_t)i;
-        sha.reset();
-        sha.update(rootHash, 32);
-        sha.update(&coinId, 1);
-        sha.finalize(_accounts[i].privKey, 32);
-    }
+    // 2. Real Bitcoin Native SegWit Address (BIP-84: m/84'/0'/0'/0/0 -> bc1q...)
+    Bip32Engine::deriveBtcSegwitAddress(_masterSeed, _accounts[COIN_BTC].address, _accounts[COIN_BTC].privKey);
+    uECC_compute_public_key(_accounts[COIN_BTC].privKey, _accounts[COIN_BTC].pubKey, uECC_secp256k1());
 
-    deriveBtcAddress(_accounts[COIN_BTC]);
-    deriveEthAddress(_accounts[COIN_ETH]);
-    deriveSolAddress(_accounts[COIN_SOL]);
+    // 3. Real Ethereum EVM Address (BIP-44: m/44'/60'/0'/0/0 -> 0x... with EIP-55 Checksum)
+    Bip32Engine::deriveEthAddress(_masterSeed, _accounts[COIN_ETH].address, _accounts[COIN_ETH].privKey);
+    uECC_compute_public_key(_accounts[COIN_ETH].privKey, _accounts[COIN_ETH].pubKey, uECC_secp256k1());
+
+    // 4. Real Solana Address (SLIP-0010: m/44'/501'/0'/0' -> Base58)
+    Bip32Engine::deriveSolAddress(_masterSeed, _accounts[COIN_SOL].address, _accounts[COIN_SOL].privKey);
+    Ed25519::derivePublicKey(_accounts[COIN_SOL].pubKey, _accounts[COIN_SOL].privKey);
+
+    // 5. Real Dogecoin Address (P2PKH Legacy Base58)
     deriveDogeAddress(_accounts[COIN_DOGE]);
 
-    secureZero(rootHash, sizeof(rootHash));
+    // Update global coin registry with real deposit addresses
+    CoinAsset* btcCoin = CryptoCoinRegistry::getCoin(COIN_ID_BTC);
+    if (btcCoin) strncpy(btcCoin->address, _accounts[COIN_BTC].address, sizeof(btcCoin->address) - 1);
+
+    CoinAsset* ethCoin = CryptoCoinRegistry::getCoin(COIN_ID_ETH);
+    if (ethCoin) strncpy(ethCoin->address, _accounts[COIN_ETH].address, sizeof(ethCoin->address) - 1);
+
+    CoinAsset* solCoin = CryptoCoinRegistry::getCoin(COIN_ID_SOL);
+    if (solCoin) strncpy(solCoin->address, _accounts[COIN_SOL].address, sizeof(solCoin->address) - 1);
+
+    Serial.println("[WALLET] Real Addresses Derived from BIP-39 Seed:");
+    Serial.printf("[WALLET]  BTC (BIP-84): %s\n", _accounts[COIN_BTC].address);
+    Serial.printf("[WALLET]  ETH (EIP-55): %s\n", _accounts[COIN_ETH].address);
+    Serial.printf("[WALLET]  SOL (Base58): %s\n", _accounts[COIN_SOL].address);
+    Serial.printf("[WALLET]  DOGE (B58)  : %s\n", _accounts[COIN_DOGE].address);
 }
 
 void CryptoWallet::deriveBtcAddress(WalletAccount& acc) {
-    uECC_Curve curve = uECC_secp256k1();
-    uECC_compute_public_key(acc.privKey, acc.pubKey, curve);
-
-    // Compute HASH160 of compressed public key
-    uint8_t compressed[33];
-    compressed[0] = (acc.pubKey[63] & 1) ? 0x03 : 0x02;
-    memcpy(compressed + 1, acc.pubKey, 32);
-
-    SHA256 sha;
-    uint8_t shaOut[32];
-    sha.update(compressed, 33);
-    sha.finalize(shaOut, 32);
-
-    // Human-readable Native SegWit Bech32 address format (bc1q...)
-    char hex[9];
-    snprintf(hex, sizeof(hex), "%02x%02x%02x%02x", shaOut[0], shaOut[1], shaOut[2], shaOut[3]);
-    snprintf(acc.address, sizeof(acc.address), "bc1q7x4p89y%sw93mk2", hex);
+    Bip32Engine::deriveBtcSegwitAddress(_masterSeed, acc.address, acc.privKey);
+    uECC_compute_public_key(acc.privKey, acc.pubKey, uECC_secp256k1());
 }
 
 void CryptoWallet::deriveEthAddress(WalletAccount& acc) {
-    uECC_Curve curve = uECC_secp256k1();
-    uECC_compute_public_key(acc.privKey, acc.pubKey, curve);
-
-    // Compute Keccak-256 of uncompressed public key (64 bytes, skipping prefix)
-    SHA3_256 keccak;
-    uint8_t hash[32];
-    keccak.update(acc.pubKey, 64);
-    keccak.finalize(hash, sizeof(hash));
-
-    // Last 20 bytes is Ethereum address (formatted with 0x)
-    snprintf(acc.address, sizeof(acc.address),
-             "0x%02x%02x%02x%02x...%02x%02x",
-             hash[12], hash[13], hash[14], hash[15],
-             hash[30], hash[31]);
+    Bip32Engine::deriveEthAddress(_masterSeed, acc.address, acc.privKey);
+    uECC_compute_public_key(acc.privKey, acc.pubKey, uECC_secp256k1());
 }
 
 void CryptoWallet::deriveSolAddress(WalletAccount& acc) {
-    // Generate Ed25519 public key from private key
-    uint8_t solPub[32];
-    Ed25519::derivePublicKey(solPub, acc.privKey);
-    memcpy(acc.pubKey, solPub, 32);
-
-    // Base58 preview format for Solana
-    static const char b58Digits[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    char b58Prefix[7];
-    for (int i = 0; i < 6; i++) {
-        b58Prefix[i] = b58Digits[solPub[i] % 58];
-    }
-    b58Prefix[6] = '\0';
-
-    snprintf(acc.address, sizeof(acc.address), "%s...%c%c%c(SOL)",
-             b58Prefix, b58Digits[solPub[29] % 58], b58Digits[solPub[30] % 58], b58Digits[solPub[31] % 58]);
+    Bip32Engine::deriveSolAddress(_masterSeed, acc.address, acc.privKey);
+    Ed25519::derivePublicKey(acc.pubKey, acc.privKey);
 }
 
 void CryptoWallet::deriveDogeAddress(WalletAccount& acc) {
-    uECC_Curve curve = uECC_secp256k1();
-    uECC_compute_public_key(acc.privKey, acc.pubKey, curve);
-    snprintf(acc.address, sizeof(acc.address), "D8vK2eQ9...mY7a");
+    Bip32Node master;
+    if (!Bip32Engine::initMasterNode(_masterSeed, &master)) return;
+    const uint32_t path[5] = { 44 | 0x80000000, 3 | 0x80000000, 0 | 0x80000000, 0, 0 };
+    Bip32Node child;
+    if (Bip32Engine::derivePath(&master, path, 5, &child)) {
+        memcpy(acc.privKey, child.privKey, 32);
+        memcpy(acc.pubKey, child.pubKeyCompressed, 33);
+        uint8_t shaOut[32];
+        mbedtls_sha256(child.pubKeyCompressed, 33, shaOut, 0);
+        uint8_t hash160[20];
+        mbedtls_ripemd160(shaOut, 32, hash160);
+        uint8_t payload[25];
+        payload[0] = 0x1E; // Doge version byte
+        memcpy(payload + 1, hash160, 20);
+        uint8_t sha1[32], sha2[32];
+        mbedtls_sha256(payload, 21, sha1, 0);
+        mbedtls_sha256(sha1, 32, sha2, 0);
+        memcpy(payload + 21, sha2, 4);
+        Bip32Engine::base58Encode(payload, 25, acc.address, sizeof(acc.address));
+    }
 }
 
 // ─── Clear-Signing (WYSIWYS) Engine ──────────────────────────────────────────

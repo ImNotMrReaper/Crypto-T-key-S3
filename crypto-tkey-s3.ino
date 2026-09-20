@@ -145,7 +145,7 @@ void setup() {
         deviceState = STATE_SETUP_WALKTHROUGH;
         portal->begin(wallet, wifi);
         ui.renderOobeWizard(1, "T-KEY SETUP", "SSID: T-Key-Setup", "GO TO: 192.168.4.1");
-        rgb.setMode(LED_MODE_SOLID_AMBER);
+        rgb.setMode(LED_MODE_SOFTAP_PULSE);
         Serial.println("[BOOT] 🌐 SoftAP Setup Portal launched at 192.168.4.1");
     } else {
         deviceState = STATE_IDLE_READY;
@@ -175,7 +175,7 @@ void loop() {
             vaultPrefs.end();
 
             portal->stop();
-            rgb.flashSuccess();
+            rgb.flashRainbow(800);
             ui.renderSuccessBanner("VAULT PROVISIONED", "LAUNCHING KEY");
             delay(1500);
 
@@ -236,9 +236,14 @@ void processIdleReadyState(ButtonEvent ev) {
     }
 
     if (ev == BTN_SHORT_PRESS) {
-        // Single tap switches directly to Live Portfolio Tracker!
+        // Single tap switches directly to Live Portfolio Tracker with dynamic coin lighting!
         deviceState = STATE_PORTFOLIO_TRACKER;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        CoinAsset* coin = PortfolioManager::getCurrentCoin();
+        if (coin) {
+            RgbColor c = RgbStatus::getCoinRgb(coin->symbol);
+            rgb.flashTap(c.r, c.g, c.b, 60);
+            rgb.setCoinColor(c.r, c.g, c.b);
+        }
         renderCurrentPortfolioCard();
     } else if (ev == BTN_LONG_PRESS) {
         // Long press opens Master PIN Gate
@@ -264,12 +269,24 @@ void renderCurrentPortfolioCard() {
 
 void processPortfolioTrackerState(ButtonEvent ev) {
     if (ev == BTN_SHORT_PRESS) {
-        // Next Coin in Carousel
+        // Next Coin in Carousel with dynamic LED color shift
         PortfolioManager::nextCoin();
+        CoinAsset* coin = PortfolioManager::getCurrentCoin();
+        if (coin) {
+            RgbColor c = RgbStatus::getCoinRgb(coin->symbol);
+            rgb.flashTap(c.r, c.g, c.b, 60);
+            rgb.setCoinColor(c.r, c.g, c.b);
+        }
         renderCurrentPortfolioCard();
     } else if (ev == BTN_DOUBLE_CLICK) {
         // Previous Coin
         PortfolioManager::prevCoin();
+        CoinAsset* coin = PortfolioManager::getCurrentCoin();
+        if (coin) {
+            RgbColor c = RgbStatus::getCoinRgb(coin->symbol);
+            rgb.flashTap(c.r, c.g, c.b, 60);
+            rgb.setCoinColor(c.r, c.g, c.b);
+        }
         renderCurrentPortfolioCard();
     } else if (ev == BTN_LONG_PRESS || ev == BTN_VERY_LONG_PRESS) {
         // Return to Idle Ready
@@ -288,18 +305,22 @@ void processPinEntryState(ButtonEvent ev) {
         if (stage != lastHoldStage) {
             lastHoldStage = stage;
             ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, stage);
+            rgb.setHoldProgress((float)stage / 100.0f);
         }
     } else if (lastHoldStage > 0) {
         lastHoldStage = 0;
         ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
+        rgb.setMode(LED_MODE_SOLID_AMBER);
     }
 
     if (ev == BTN_SHORT_PRESS) {
         currentDigitVal = (currentDigitVal + 1) % 10;
         pinDigits[pinIndex] = '0' + currentDigitVal;
         ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
+        rgb.flashTap(0, 229, 255, 60); // Crisp cyan tactile feedback
         Serial.printf("[PIN] Slot %d = %d\n", pinIndex + 1, currentDigitVal);
     } else if (ev == BTN_DOUBLE_CLICK) {
+        rgb.flashDoubleTap(255, 140, 0); // Amber backspace feedback
         if (pinIndex > 0) {
             pinDigits[pinIndex] = '0';
             pinIndex--;
@@ -318,6 +339,7 @@ void processPinEntryState(ButtonEvent ev) {
             currentDigitVal = 0;
             pinDigits[pinIndex] = '0';
             ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
+            rgb.flashTap(0, 255, 100, 100); // Emerald advance slot feedback
         } else {
             pinDigits[PIN_LENGTH] = '\0';
             Serial.printf("[PIN] Validating PIN: %s\n", pinDigits);
@@ -327,13 +349,13 @@ void processPinEntryState(ButtonEvent ev) {
             } else if (strcmp(pinDigits, masterPin) == 0) {
                 Serial.println("[VAULT] Master PIN Accepted! Unlocked.");
                 wallet->unlock(pinDigits);
-                rgb.flashSuccess();
+                rgb.flashRainbow(800); // Celebratory rainbow shimmer
                 ui.renderSuccessBanner("VAULT UNLOCKED", "CRYPTO SIGNER READY");
                 delay(1200);
 
                 deviceState = STATE_VAULT_DASHBOARD;
-                rgb.setMode(LED_MODE_BREATHE_CYAN);
                 currentViewCoin = COIN_BTC;
+                rgb.setCoinColor(255, 140, 0); // Bitcoin gold for initial vault view
                 const WalletAccount* acc = wallet->getAccount(COIN_BTC);
                 ui.renderWalletScreen("BITCOIN", "BTC (SegWit)", acc ? acc->address : "bc1q...", acc ? acc->derivationPath : "m/84'/0'/0'/0/0");
             } else {
@@ -348,6 +370,7 @@ void processPinEntryState(ButtonEvent ev) {
         }
     } else if (ev == BTN_VERY_LONG_PRESS) {
         resetPinEntry();
+        rgb.flashDoubleTap(255, 0, 0);
         ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
     } else if (ev == BTN_PANIC_HOLD) {
         DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
@@ -361,10 +384,13 @@ void processVaultDashboardState(ButtonEvent ev) {
         const WalletAccount* acc = wallet->getAccount(currentViewCoin);
         const char* name = "BITCOIN";
         const char* sym  = "BTC (SegWit)";
-        if (currentViewCoin == COIN_ETH)  { name = "ETHEREUM"; sym = "ETH (ERC-20)"; }
-        if (currentViewCoin == COIN_SOL)  { name = "SOLANA";   sym = "SOL (Ed25519)"; }
-        if (currentViewCoin == COIN_DOGE) { name = "DOGECOIN"; sym = "DOGE (Legacy)"; }
+        uint8_t cr = 255, cg = 140, cb = 0;
+        if (currentViewCoin == COIN_ETH)  { name = "ETHEREUM"; sym = "ETH (ERC-20)"; cr = 138; cg = 75; cb = 255; }
+        if (currentViewCoin == COIN_SOL)  { name = "SOLANA";   sym = "SOL (Ed25519)"; cr = 20; cg = 241; cb = 149; }
+        if (currentViewCoin == COIN_DOGE) { name = "DOGECOIN"; sym = "DOGE (Legacy)"; cr = 255; cg = 195; cb = 15; }
 
+        rgb.flashTap(cr, cg, cb, 60);
+        rgb.setCoinColor(cr, cg, cb);
         ui.renderWalletScreen(name, sym, acc ? acc->address : "", acc ? acc->derivationPath : "");
     } else if (ev == BTN_LONG_PRESS || ev == BTN_VERY_LONG_PRESS) {
         wallet->lock();
@@ -389,13 +415,15 @@ void startSeedGeneration(int wordCount = 12) {
 
 void processSeedEntropyState(ButtonEvent ev) {
     if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS) {
-        SeedGenerator::recordButtonPressJitter(btn.currentHoldDuration() * 1000, 50000);
+        uint32_t jitter = (uint32_t)(btn.currentHoldDuration() * 1000 + micros());
+        SeedGenerator::recordButtonPressJitter(jitter, 50000);
         int samples = SeedGenerator::getEntropySampleCount();
         ui.renderEntropyGatherScreen(samples, 12);
-        rgb.flashSuccess();
+        rgb.setEntropyJitter(jitter);
 
         if (samples >= 12) {
             // Generate verified mnemonic
+            rgb.flashRainbow(1200);
             bool ok = (totalMnemonicWords == 24) 
                 ? SeedGenerator::generateMnemonic24Words(generatedMnemonic, sizeof(generatedMnemonic))
                 : SeedGenerator::generateMnemonic12Words(generatedMnemonic, sizeof(generatedMnemonic));
@@ -431,14 +459,16 @@ void processSeedWordDisplayState(ButtonEvent ev) {
     if (ev == BTN_SHORT_PRESS) {
         // Next Word
         currentWordIdx = (currentWordIdx + 1) % totalMnemonicWords;
+        rgb.flashTap(0, 229, 255, 50);
         ui.renderSeedBackupScreen(currentWordIdx + 1, totalMnemonicWords, mnemonicWords[currentWordIdx]);
     } else if (ev == BTN_DOUBLE_CLICK) {
         // Previous Word
         currentWordIdx = (currentWordIdx - 1 + totalMnemonicWords) % totalMnemonicWords;
+        rgb.flashDoubleTap(255, 140, 0);
         ui.renderSeedBackupScreen(currentWordIdx + 1, totalMnemonicWords, mnemonicWords[currentWordIdx]);
     } else if (ev == BTN_LONG_PRESS) {
         // Complete seed verification
-        rgb.flashSuccess();
+        rgb.flashRainbow(1000);
         ui.renderSuccessBanner("SEED BACKUP COMPLETE", "WALLET SECURED");
         delay(1200);
 
@@ -485,12 +515,13 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
         if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS) {
             confirmed = true;
             done = true;
-            rgb.flashSuccess();
+            rgb.flashRainbow(900);
             ui.renderSuccessBanner(isRegistration ? "PASSKEY REGISTERED" : "ASSERTION SIGNED", reqDomain);
             delay(1000);
         } else if (ev == BTN_DOUBLE_CLICK || ev == BTN_VERY_LONG_PRESS) {
             confirmed = false;
             done = true;
+            rgb.flashDoubleTap(255, 0, 0);
             ui.renderErrorBanner("Auth Cancelled");
             delay(1000);
         } else if (ev == BTN_PANIC_HOLD) {
@@ -556,11 +587,73 @@ void handleSerialCommands() {
         Serial.println("  json                     - Output compact JSON for WebUSB companion");
         Serial.println("  newseed [12|24]          - Start hybrid entropy BIP-39 seed wizard");
         Serial.println("  setpin <PIN>             - Set 4-digit master PIN");
+        Serial.println("  unlock <PIN>             - Unlock crypto vault and reveal derived addresses");
+        Serial.println("  addresses                - Print genuine derived BIP-32/BIP-84/EIP-55 addresses");
+        Serial.println("  lock                     - Lock crypto vault immediately");
+        Serial.println("  led <btc|eth|sol|rainbow>- Test RGB DotStar LED color mode");
         Serial.println("  panic                    - Trigger emergency flash nuke");
     } else if (cmd.equalsIgnoreCase("status")) {
         Serial.printf("Uptime: %lus | CPU: %dMHz | Vault: %s | Master PIN: %s | Active Coins: %d\n",
             millis() / 1000, getCpuFrequencyMhz(), wallet->isUnlocked() ? "UNLOCKED" : "LOCKED",
             masterPin, PortfolioManager::getActiveCount());
+    } else if (cmd.startsWith("unlock ")) {
+        String pin = cmd.substring(7);
+        pin.trim();
+        if (wallet->unlock(pin.c_str())) {
+            rgb.flashRainbow(800);
+            rgb.setCoinColor(255, 140, 0);
+            deviceState = STATE_VAULT_DASHBOARD;
+            currentViewCoin = COIN_BTC;
+            const WalletAccount* acc = wallet->getAccount(COIN_BTC);
+            ui.renderWalletScreen("BITCOIN", "BTC (SegWit)", acc ? acc->address : "bc1q...", acc ? acc->derivationPath : "m/84'/0'/0'/0/0");
+            Serial.println("[VAULT] ✅ Unlocked successfully! Master keys derived in memory.");
+        } else {
+            rgb.setMode(LED_MODE_STROBE_RED);
+            delay(1000);
+            rgb.setMode(LED_MODE_SOLID_AMBER);
+            Serial.println("[VAULT] ❌ Error: Invalid PIN.");
+        }
+    } else if (cmd.equalsIgnoreCase("addresses")) {
+        if (!wallet->isUnlocked()) {
+            Serial.println("[VAULT] 🔒 Error: Vault is LOCKED. Unlock first with 'unlock <PIN>' or via device screen.");
+        } else {
+            Serial.println("\n--- Genuine Derived Addresses (BIP-32 / BIP-84 / EIP-55) ---");
+            for (int i = 0; i < COIN_COUNT; i++) {
+                const WalletAccount* acc = wallet->getAccount((CryptoCoin)i);
+                if (acc) {
+                    Serial.printf("  %-10s [%s] (%s):\n    %s\n", acc->name, acc->symbol, acc->derivationPath, acc->address);
+                }
+            }
+            Serial.println("------------------------------------------------------------\n");
+        }
+    } else if (cmd.equalsIgnoreCase("lock")) {
+        wallet->lock();
+        deviceState = STATE_IDLE_READY;
+        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        ui.renderReadyDashboard(millis() / 1000, true, false);
+        Serial.println("[VAULT] 🔒 Vault locked and volatile key material zeroized.");
+    } else if (cmd.startsWith("led ")) {
+        String mode = cmd.substring(4);
+        mode.trim();
+        if (mode.equalsIgnoreCase("rainbow")) {
+            rgb.flashRainbow(2000);
+            Serial.println("[LED] 🌈 Rainbow shimmer activated");
+        } else if (mode.equalsIgnoreCase("btc")) {
+            rgb.setCoinColor(255, 140, 0);
+            Serial.println("[LED] 🟠 Bitcoin Gold/Orange activated");
+        } else if (mode.equalsIgnoreCase("eth")) {
+            rgb.setCoinColor(138, 75, 255);
+            Serial.println("[LED] 🟣 Ethereum Royal Violet activated");
+        } else if (mode.equalsIgnoreCase("sol")) {
+            rgb.setCoinColor(20, 241, 149);
+            Serial.println("[LED] 🟢 Solana Neon Turquoise activated");
+        } else if (mode.equalsIgnoreCase("doge")) {
+            rgb.setCoinColor(255, 195, 15);
+            Serial.println("[LED] 🟡 Dogecoin Sunny Gold activated");
+        } else if (mode.equalsIgnoreCase("softap")) {
+            rgb.setMode(LED_MODE_SOFTAP_PULSE);
+            Serial.println("[LED] 🟪 SoftAP Portal Neon Pulse activated");
+        }
     } else if (cmd.startsWith("newseed")) {
         int words = 12;
         if (cmd.indexOf("24") != -1) words = 24;
