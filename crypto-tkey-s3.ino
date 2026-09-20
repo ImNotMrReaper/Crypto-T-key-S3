@@ -187,6 +187,7 @@ void loop() {
     // 1. Update Subsystems
     ButtonEvent ev = btn.update();
     rgb.update();
+    ctapHid.process();
     if (wifi) wifi->update();
     if (ticker) ticker->update();
     if (portal) portal->update();
@@ -480,11 +481,62 @@ void processWifiState(ButtonEvent ev) {
     }
 }
 
+// ─── FIDO2 / WebAuthn User Presence Prompt Callback ─────────────────────────
+bool handleUserPresencePrompt(const char* rpId, bool isRegistration) {
+    if (rpId && strlen(rpId) > 0) {
+        strncpy(reqDomain, rpId, sizeof(reqDomain) - 1);
+    }
+    DeviceState prev = deviceState;
+    deviceState = STATE_FIDO_AUTH_REQUEST;
+    rgb.setMode(LED_MODE_PULSE_GREEN);
+    ui.renderFidoRequest(reqDomain);
+    Serial.printf("[FIDO2] User Presence Prompt active for '%s' (Reg: %s)\n", reqDomain, isRegistration ? "YES" : "NO");
+
+    uint32_t start = millis();
+    bool confirmed = false;
+    bool done = false;
+
+    while (millis() - start < 30000 && !done) {
+        ButtonEvent ev = btn.update();
+        rgb.update();
+        if (wifi) wifi->update();
+        handleSerialCommands();
+
+        if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS) {
+            confirmed = true;
+            done = true;
+            rgb.flashSuccess();
+            ui.renderSuccessBanner(isRegistration ? "PASSKEY REGISTERED" : "ASSERTION SIGNED", reqDomain);
+            delay(1200);
+        } else if (ev == BTN_DOUBLE_CLICK || ev == BTN_VERY_LONG_PRESS) {
+            confirmed = false;
+            done = true;
+            ui.renderErrorBanner("Auth Cancelled");
+            delay(1000);
+        } else if (ev == BTN_PANIC_HOLD) {
+            DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
+            return false;
+        }
+
+        delay(10);
+    }
+
+    deviceState = prev;
+    if (deviceState == STATE_IDLE_DASHBOARD) {
+        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
+    } else if (deviceState == STATE_LOCKED) {
+        rgb.setMode(LED_MODE_SOLID_AMBER);
+        ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
+    }
+
+    return confirmed;
+}
+
 // ─── State: FIDO2 / WebAuthn Request ─────────────────────────────────────────
 void processFidoState(ButtonEvent ev) {
     if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS) {
         // User Presence Confirmed!
-        fido->confirmUserPresence();
         Serial.printf("[FIDO2] ✅ User Presence Confirmed for %s!\n", reqDomain);
         rgb.flashSuccess();
         ui.renderSuccessBanner("ASSERTION SIGNED", reqDomain);
@@ -494,7 +546,6 @@ void processFidoState(ButtonEvent ev) {
         rgb.setMode(LED_MODE_BREATHE_CYAN);
         ui.renderDashboard(millis() / 1000, true, true, wifi->isConnected(), wifi->getIp().c_str());
     } else if (ev == BTN_DOUBLE_CLICK || ev == BTN_VERY_LONG_PRESS) {
-        fido->rejectUserPresence();
         Serial.println("[FIDO2] ❌ Authentication Rejected by user.");
         ui.renderErrorBanner("Auth Cancelled");
         delay(1000);
