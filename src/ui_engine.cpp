@@ -217,6 +217,98 @@ void UiEngine::renderWalletScreen(const char* coinName, const char* symbol, cons
     _sprite->pushSprite(0, 0);
 }
 
+void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float balance, float priceUsd, float change24h, int activeIdx, int totalActive, float totalPortfolioUsd) {
+    if (!_sprite) return;
+    _sprite->fillSprite(COLOR_BG);
+
+    char hdr[32];
+    snprintf(hdr, sizeof(hdr), "%s (%d/%d) // TRACKER", symbol, activeIdx + 1, totalActive);
+    drawHeader(hdr, COLOR_HEADER_BG, COLOR_NEON_CYAN);
+
+    // Primary Content Zone (Y: 14..65)
+    _sprite->setTextDatum(TL_DATUM);
+
+    // Balance
+    char balStr[32];
+    if (balance < 1000.0f) {
+        snprintf(balStr, sizeof(balStr), "%.4f %s", balance, symbol);
+    } else {
+        snprintf(balStr, sizeof(balStr), "%.1f %s", balance, symbol);
+    }
+    _sprite->setTextColor(0xFFFF, COLOR_BG);
+    _sprite->drawString(balStr, 8, 18, 2);
+
+    // USD Price & 24h change
+    char priceStr[32];
+    snprintf(priceStr, sizeof(priceStr), "$%.2f", priceUsd);
+    _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
+    _sprite->drawString(priceStr, 8, 36, 1);
+
+    char chgStr[16];
+    snprintf(chgStr, sizeof(chgStr), "%s%.1f%%", change24h >= 0 ? "+" : "", change24h);
+    _sprite->setTextColor(change24h >= 0 ? COLOR_SIGNAL_GREEN : COLOR_CRIMSON_PANIC, COLOR_BG);
+    _sprite->drawString(chgStr, 75, 36, 1);
+
+    // Fiat value of this asset vs total portfolio
+    float assetFiat = balance * priceUsd;
+    char valStr[32];
+    snprintf(valStr, sizeof(valStr), "VAL: $%.2f", assetFiat);
+    _sprite->setTextColor(COLOR_CYBER_GOLD, COLOR_BG);
+    _sprite->drawString(valStr, 8, 50, 1);
+
+    char totStr[32];
+    snprintf(totStr, sizeof(totStr), "TOT: $%.0f", totalPortfolioUsd);
+    _sprite->setTextColor(0x7BEF, COLOR_BG);
+    _sprite->drawString(totStr, 95, 50, 1);
+
+    drawFooter("[●] TAP: NEXT  [■] HOLD: BACK", 0, 0.0f);
+    _sprite->pushSprite(0, 0);
+}
+
+void UiEngine::renderEntropyGatherScreen(int currentSamples, int requiredSamples) {
+    if (!_sprite) return;
+    _sprite->fillSprite(COLOR_BG);
+
+    drawHeader("SEED GENERATOR // ENTROPY", 0x3000, COLOR_CYBER_GOLD);
+
+    _sprite->setTextDatum(MC_DATUM);
+    _sprite->setTextColor(0xFFFF, COLOR_BG);
+    _sprite->drawString("TAP BUTTON RANDOMLY", DISP_W / 2, 28, 1);
+
+    char countStr[24];
+    snprintf(countStr, sizeof(countStr), "COLLECTED: %d / %d", currentSamples, requiredSamples);
+    _sprite->setTextColor(COLOR_CYBER_GOLD, COLOR_BG);
+    _sprite->drawString(countStr, DISP_W / 2, 44, 2);
+
+    float p = (float)currentSamples / (float)requiredSamples;
+    if (p > 1.0f) p = 1.0f;
+    drawFooter("", COLOR_CYBER_GOLD, p);
+
+    _sprite->pushSprite(0, 0);
+}
+
+void UiEngine::renderSeedBackupScreen(int wordNum, int totalWords, const char* word) {
+    if (!_sprite) return;
+    _sprite->fillSprite(COLOR_BG);
+
+    char hdr[32];
+    snprintf(hdr, sizeof(hdr), "BIP-39 SEED (%d/%d)", wordNum, totalWords);
+    drawHeader(hdr, 0x0010, COLOR_SIGNAL_GREEN);
+
+    _sprite->setTextDatum(MC_DATUM);
+    char numStr[16];
+    snprintf(numStr, sizeof(numStr), "WORD #%d", wordNum);
+    _sprite->setTextColor(0xAD55, COLOR_BG);
+    _sprite->drawString(numStr, DISP_W / 2, 26, 1);
+
+    _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
+    _sprite->drawString(word, DISP_W / 2, 44, 4); // Big font for mnemonic word
+
+    drawFooter(wordNum < totalWords ? "[●] TAP: NEXT WORD" : "[■] HOLD: CONFIRM SEED", 0, 0.0f);
+
+    _sprite->pushSprite(0, 0);
+}
+
 void UiEngine::renderAirGapScreen(const char* psbtFile, const char* summary, bool readyToSign) {
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);

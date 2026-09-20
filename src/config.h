@@ -61,6 +61,9 @@ enum DeviceState {
     STATE_IDLE_READY,          // Pure Security Key Ready (1-Tap WebAuthn active)
     STATE_PIN_ENTRY,           // Master PIN gate (Vault / Offline Signer access)
     STATE_VAULT_DASHBOARD,     // Unlocked Crypto Vault (BIP-39 / Addresses)
+    STATE_PORTFOLIO_TRACKER,   // Multi-currency holdings & live price tracker
+    STATE_SEED_ENTROPY_COLLECT,// Collecting human timing jitter for seed generation
+    STATE_SEED_WORD_DISPLAY,   // Word-by-word BIP-39 mnemonic verification
     STATE_FIDO_AUTH_PROMPT,    // WebAuthn / Passkey user presence prompt
     STATE_CRYPTO_SIGN_PROMPT,  // Clear-signing transaction verification (WYSIWYS)
     STATE_AIRGAP_SD_SIGN,      // MicroSD PSBT air-gap signer

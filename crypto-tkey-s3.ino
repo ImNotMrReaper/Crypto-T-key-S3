@@ -2,14 +2,16 @@
  * crypto-tkey-s3.ino — Master Orchestrator for Crypto TKey S3 Authenticator & Vault
  * ==============================================================================
  * Hardware: LilyGo T-Dongle S3 (ESP32-S3, ST7735 0.96" TFT, APA102 RGB, microSD)
- * Standard: Follows lilygo-tdongle-ui-dev and fido2-security-key-dev skills.
+ * Standard: Follows lilygo-tdongle-ui-dev, fido2-security-key-dev, and hardware-wallet-dev skills.
  * 
  * Core Features:
  *   1. Zero-Flicker Double-Buffered UI (160x80 ST7735, 14px Header/52px Card/14px Footer)
  *   2. Pure FIDO2 / CTAPHID Security Key (1-Tap touch for instant WebAuthn logins)
- *   3. Multi-Currency Offline Crypto Signer & Vault (BIP-39 / BIP-44 / PSBT air-gap)
- *   4. Zero-RF Thermal Throttling (80MHz dynamic clock, RF disabled, <35mA total draw)
- *   5. Duress Panic Nuke (>6s panic hold or PIN 9999 triggers full flash scrub)
+ *   3. 24-Cryptocurrency Dynamic Asset Registry & Live Portfolio Tracker (USD values)
+ *   4. Hybrid Entropy BIP-39 Seed Generator (TRNG + Button Jitter Conditioning)
+ *   5. Zero-RF Thermal Throttling (80MHz dynamic clock, RF disabled, <35mA total draw)
+ *   6. Duress Panic Nuke (>6s panic hold or PIN 9999 triggers full flash scrub)
+ *   7. WebUSB & USB Serial Companion Bridge for instant live CoinGecko sync
  */
 
 #include <Arduino.h>
@@ -34,6 +36,9 @@ __attribute__((constructor(101))) void pre_init_early() {
 #include "src/crypto_wallet.h"
 #include "src/ctaphid.h"
 #include "src/ctap2.h"
+#include "src/crypto_coins.h"
+#include "src/seed_gen.h"
+#include "src/portfolio_mgr.h"
 
 // ─── Subsystem Allocations (Dynamic Initialization) ──────────────────────────
 TFT_eSPI*     tft    = nullptr;
@@ -53,6 +58,13 @@ uint8_t       lastHoldStage = 0;
 uint32_t      lastStateUpdate = 0;
 CryptoCoin    currentViewCoin = COIN_BTC;
 
+// Seed Generator State
+char          generatedMnemonic[240] = {0};
+char          mnemonicWords[24][16];
+int           totalMnemonicWords = 12;
+int           currentWordIdx = 0;
+
+// Temporary buffers for active requests
 char reqDomain[48]     = "webauthn.io";
 char reqChain[24]      = "Bitcoin Mainnet";
 char reqRecipient[48]  = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh";
@@ -63,9 +75,13 @@ void handleSerialCommands();
 void processIdleReadyState(ButtonEvent ev);
 void processPinEntryState(ButtonEvent ev);
 void processVaultDashboardState(ButtonEvent ev);
+void processPortfolioTrackerState(ButtonEvent ev);
+void processSeedEntropyState(ButtonEvent ev);
+void processSeedWordDisplayState(ButtonEvent ev);
 void resetPinEntry();
 void loadSecurityConfig();
 bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistration);
+void renderCurrentPortfolioCard();
 
 // ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
@@ -107,14 +123,18 @@ void setup() {
     ctap2Engine.begin();
     ctap2Engine.setUserPresencePrompt(handleUserPresencePrompt);
 
-    // 6. Security Config
+    // 6. Portfolio & Seed Engines
+    PortfolioManager::init();
+    SeedGenerator::init();
+
+    // 7. Security Config
     loadSecurityConfig();
 
     deviceState = STATE_IDLE_READY;
     ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
     rgb.setMode(LED_MODE_BREATHE_CYAN);
 
-    Serial.println("[BOOT] ✅ Crypto TKey S3 Ready. Pure Security Key Mode Active.");
+    Serial.println("[BOOT] ✅ Crypto TKey S3 Ready. Pure Security Key & Crypto Vault Active.");
     Serial.println("========================================================\n");
 }
 
@@ -133,14 +153,22 @@ void loop() {
         case STATE_IDLE_READY:
             processIdleReadyState(ev);
             break;
+        case STATE_PORTFOLIO_TRACKER:
+            processPortfolioTrackerState(ev);
+            break;
         case STATE_PIN_ENTRY:
             processPinEntryState(ev);
             break;
         case STATE_VAULT_DASHBOARD:
             processVaultDashboardState(ev);
             break;
+        case STATE_SEED_ENTROPY_COLLECT:
+            processSeedEntropyState(ev);
+            break;
+        case STATE_SEED_WORD_DISPLAY:
+            processSeedWordDisplayState(ev);
+            break;
         case STATE_DURESS_WIPED:
-            // Halts indefinitely in decoy crash
             delay(100);
             break;
         default:
@@ -152,19 +180,52 @@ void loop() {
 
 // ─── State: Idle Security Key Ready (1-Tap Touch Active) ─────────────────────
 void processIdleReadyState(ButtonEvent ev) {
-    // Refresh uptime on screen every 2 seconds
     if (millis() - lastStateUpdate > 2000 && !PowerManager::isDisplaySleeping()) {
         ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
         lastStateUpdate = millis();
     }
 
-    if (ev == BTN_LONG_PRESS) {
-        // User wants to access Master PIN Vault
+    if (ev == BTN_SHORT_PRESS) {
+        // Single tap switches directly to Live Portfolio Tracker!
+        deviceState = STATE_PORTFOLIO_TRACKER;
+        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        renderCurrentPortfolioCard();
+    } else if (ev == BTN_LONG_PRESS) {
+        // Long press opens Master PIN Gate
         deviceState = STATE_PIN_ENTRY;
         resetPinEntry();
         rgb.setMode(LED_MODE_SOLID_AMBER);
         ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
         Serial.println("[VAULT] Entering Master PIN gate...");
+    } else if (ev == BTN_PANIC_HOLD) {
+        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
+    }
+}
+
+// ─── State: Portfolio Tracker (Carousel of Active Coins) ─────────────────────
+void renderCurrentPortfolioCard() {
+    CoinAsset* coin = PortfolioManager::getCurrentCoin();
+    if (coin) {
+        ui.renderPortfolioCard(coin->symbol, coin->name, coin->balance, coin->priceUsd, coin->change24h,
+                               PortfolioManager::getCurrentIndex(), PortfolioManager::getActiveCount(),
+                               PortfolioManager::getTotalValueUsd());
+    }
+}
+
+void processPortfolioTrackerState(ButtonEvent ev) {
+    if (ev == BTN_SHORT_PRESS) {
+        // Next Coin in Carousel
+        PortfolioManager::nextCoin();
+        renderCurrentPortfolioCard();
+    } else if (ev == BTN_DOUBLE_CLICK) {
+        // Previous Coin
+        PortfolioManager::prevCoin();
+        renderCurrentPortfolioCard();
+    } else if (ev == BTN_LONG_PRESS || ev == BTN_VERY_LONG_PRESS) {
+        // Return to Idle Ready
+        deviceState = STATE_IDLE_READY;
+        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
     } else if (ev == BTN_PANIC_HOLD) {
         DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
@@ -195,7 +256,6 @@ void processPinEntryState(ButtonEvent ev) {
             currentDigitVal = pinDigits[pinIndex] - '0';
             ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
         } else {
-            // Cancel PIN entry back to Idle Ready
             deviceState = STATE_IDLE_READY;
             rgb.setMode(LED_MODE_BREATHE_CYAN);
             ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
@@ -247,7 +307,6 @@ void processPinEntryState(ButtonEvent ev) {
 // ─── State: Vault Dashboard & Multi-Currency Address Explorer ───────────────
 void processVaultDashboardState(ButtonEvent ev) {
     if (ev == BTN_SHORT_PRESS) {
-        // Cycle through currencies: BTC -> ETH -> SOL -> DOGE
         currentViewCoin = (CryptoCoin)((currentViewCoin + 1) % 4);
         const WalletAccount* acc = wallet->getAccount(currentViewCoin);
         const char* name = "BITCOIN";
@@ -258,7 +317,6 @@ void processVaultDashboardState(ButtonEvent ev) {
 
         ui.renderWalletScreen(name, sym, acc ? acc->address : "", acc ? acc->derivationPath : "");
     } else if (ev == BTN_LONG_PRESS || ev == BTN_VERY_LONG_PRESS) {
-        // Lock Vault back to Idle Ready
         wallet->lock();
         deviceState = STATE_IDLE_READY;
         rgb.setMode(LED_MODE_BREATHE_CYAN);
@@ -266,6 +324,77 @@ void processVaultDashboardState(ButtonEvent ev) {
         Serial.println("[VAULT] Vault Locked.");
     } else if (ev == BTN_PANIC_HOLD) {
         DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
+    }
+}
+
+// ─── State: Seed Generation (Entropy Gathering & Word Verification) ──────────
+void startSeedGeneration(int wordCount = 12) {
+    totalMnemonicWords = (wordCount == 24) ? 24 : 12;
+    SeedGenerator::resetEntropy();
+    deviceState = STATE_SEED_ENTROPY_COLLECT;
+    rgb.setMode(LED_MODE_SOLID_AMBER);
+    ui.renderEntropyGatherScreen(0, 12);
+    Serial.println("[SEED] Tap physical button 12 times to inject human entropy...");
+}
+
+void processSeedEntropyState(ButtonEvent ev) {
+    if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS) {
+        SeedGenerator::recordButtonPressJitter(btn.currentHoldDuration() * 1000, 50000);
+        int samples = SeedGenerator::getEntropySampleCount();
+        ui.renderEntropyGatherScreen(samples, 12);
+        rgb.flashSuccess();
+
+        if (samples >= 12) {
+            // Generate verified mnemonic
+            bool ok = (totalMnemonicWords == 24) 
+                ? SeedGenerator::generateMnemonic24Words(generatedMnemonic, sizeof(generatedMnemonic))
+                : SeedGenerator::generateMnemonic12Words(generatedMnemonic, sizeof(generatedMnemonic));
+
+            if (ok) {
+                // Parse words
+                char temp[240];
+                strncpy(temp, generatedMnemonic, sizeof(temp));
+                char* token = strtok(temp, " ");
+                int i = 0;
+                while (token && i < totalMnemonicWords) {
+                    strncpy(mnemonicWords[i], token, sizeof(mnemonicWords[i]) - 1);
+                    token = strtok(nullptr, " ");
+                    i++;
+                }
+
+                currentWordIdx = 0;
+                deviceState = STATE_SEED_WORD_DISPLAY;
+                rgb.setMode(LED_MODE_BREATHE_CYAN);
+                ui.renderSeedBackupScreen(1, totalMnemonicWords, mnemonicWords[0]);
+                Serial.printf("[SEED] Successfully generated %d-word BIP-39 mnemonic!\n", totalMnemonicWords);
+            }
+        }
+    } else if (ev == BTN_DOUBLE_CLICK) {
+        // Cancel back to idle
+        deviceState = STATE_IDLE_READY;
+        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
+    }
+}
+
+void processSeedWordDisplayState(ButtonEvent ev) {
+    if (ev == BTN_SHORT_PRESS) {
+        // Next Word
+        currentWordIdx = (currentWordIdx + 1) % totalMnemonicWords;
+        ui.renderSeedBackupScreen(currentWordIdx + 1, totalMnemonicWords, mnemonicWords[currentWordIdx]);
+    } else if (ev == BTN_DOUBLE_CLICK) {
+        // Previous Word
+        currentWordIdx = (currentWordIdx - 1 + totalMnemonicWords) % totalMnemonicWords;
+        ui.renderSeedBackupScreen(currentWordIdx + 1, totalMnemonicWords, mnemonicWords[currentWordIdx]);
+    } else if (ev == BTN_LONG_PRESS) {
+        // Complete seed verification
+        rgb.flashSuccess();
+        ui.renderSuccessBanner("SEED BACKUP COMPLETE", "WALLET SECURED");
+        delay(1200);
+
+        deviceState = STATE_IDLE_READY;
+        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        ui.renderReadyDashboard(millis() / 1000, true, true);
     }
 }
 
@@ -358,15 +487,34 @@ void handleSerialCommands() {
     cmd.trim();
     if (cmd.length() == 0) return;
 
+    // Check PortfolioManager command dispatcher first
+    String res;
+    if (PortfolioManager::processCommand(cmd, res)) {
+        Serial.println(res);
+        renderCurrentPortfolioCard();
+        return;
+    }
+
     if (cmd.equalsIgnoreCase("help")) {
         Serial.println("\n--- Crypto TKey S3 CLI ---");
-        Serial.println("  status       - Print security key status & uptime");
-        Serial.println("  setpin <PIN> - Set 4-digit master PIN");
-        Serial.println("  panic        - Trigger emergency flash nuke");
-        Serial.println("  addresses    - Print derived cryptocurrency addresses");
+        Serial.println("  status                   - Print security key status & uptime");
+        Serial.println("  coins                    - List all 24 supported coins & holdings");
+        Serial.println("  enable <SYM>             - Enable coin in active portfolio tracker");
+        Serial.println("  disable <SYM>            - Disable coin from portfolio tracker");
+        Serial.println("  setbal <SYM> <AMT>       - Set user coin holding balance");
+        Serial.println("  setprice <SYM> <P> [C]   - Update live USD price & 24h change");
+        Serial.println("  json                     - Output compact JSON for WebUSB companion");
+        Serial.println("  newseed [12|24]          - Start hybrid entropy BIP-39 seed wizard");
+        Serial.println("  setpin <PIN>             - Set 4-digit master PIN");
+        Serial.println("  panic                    - Trigger emergency flash nuke");
     } else if (cmd.equalsIgnoreCase("status")) {
-        Serial.printf("Uptime: %lus | CPU: %dMHz | Vault: %s | Master PIN: %s\n",
-            millis() / 1000, getCpuFrequencyMhz(), wallet->isUnlocked() ? "UNLOCKED" : "LOCKED", masterPin);
+        Serial.printf("Uptime: %lus | CPU: %dMHz | Vault: %s | Master PIN: %s | Active Coins: %d\n",
+            millis() / 1000, getCpuFrequencyMhz(), wallet->isUnlocked() ? "UNLOCKED" : "LOCKED",
+            masterPin, PortfolioManager::getActiveCount());
+    } else if (cmd.startsWith("newseed")) {
+        int words = 12;
+        if (cmd.indexOf("24") != -1) words = 24;
+        startSeedGeneration(words);
     } else if (cmd.startsWith("setpin ")) {
         String newPin = cmd.substring(7);
         newPin.trim();
@@ -381,10 +529,5 @@ void handleSerialCommands() {
         }
     } else if (cmd.equalsIgnoreCase("panic")) {
         DuressWipe::execute(*tft, rgb, "SERIAL_PANIC");
-    } else if (cmd.equalsIgnoreCase("addresses")) {
-        Serial.printf("BTC  : %s\n", wallet->getAddress(COIN_BTC));
-        Serial.printf("ETH  : %s\n", wallet->getAddress(COIN_ETH));
-        Serial.printf("SOL  : %s\n", wallet->getAddress(COIN_SOL));
-        Serial.printf("DOGE : %s\n", wallet->getAddress(COIN_DOGE));
     }
 }

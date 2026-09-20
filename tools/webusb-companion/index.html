@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Crypto TKey S3 — Web Companion & Live Price Bridge</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    :root {
+      --bg: #0a0a0c;
+      --card-bg: #121318;
+      --card-border: #1f2330;
+      --cyan: #00e5ff;
+      --green: #00ff66;
+      --gold: #ffb300;
+      --red: #ff1744;
+      --text: #e0e6ed;
+      --text-dim: #798696;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; }
+    body { background: var(--bg); color: var(--text); padding: 24px; min-height: 100vh; }
+    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--card-border); padding-bottom: 16px; margin-bottom: 24px; }
+    .header h1 { font-size: 20px; color: var(--cyan); letter-spacing: 1px; display: flex; align-items: center; gap: 8px; }
+    .btn { background: var(--card-bg); border: 1px solid var(--cyan); color: var(--cyan); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.2s; }
+    .btn:hover { background: var(--cyan); color: #000; }
+    .btn-green { border-color: var(--green); color: var(--green); }
+    .btn-green:hover { background: var(--green); color: #000; }
+    .portfolio-banner { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 20px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; }
+    .val-large { font-size: 32px; font-weight: bold; color: var(--green); font-family: monospace; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 8px; transition: border-color 0.2s; }
+    .card.active { border-color: var(--cyan); }
+    .card-top { display: flex; justify-content: space-between; align-items: center; }
+    .sym { font-weight: bold; font-size: 16px; color: #fff; }
+    .price { font-family: monospace; font-size: 14px; color: var(--cyan); }
+    .chg-pos { color: var(--green); font-size: 12px; }
+    .chg-neg { color: var(--red); font-size: 12px; }
+    .bal-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+    .bal-input { background: #000; border: 1px solid var(--card-border); color: #fff; padding: 6px 10px; border-radius: 4px; width: 100%; font-family: monospace; font-size: 13px; }
+    .bal-input:focus { border-color: var(--cyan); outline: none; }
+    .status-bar { font-size: 12px; color: var(--text-dim); margin-top: 16px; display: flex; justify-content: space-between; font-family: monospace; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>⚡ CRYPTO TKEY S3 // WEB COMPANION</h1>
+    <div>
+      <button id="btnConnect" class="btn" onclick="connectUsb()">CONNECT TKEY S3 (USB)</button>
+      <button id="btnFetch" class="btn btn-green" onclick="fetchLivePrices()">FETCH COINGECKO PRICES</button>
+      <button id="btnSync" class="btn" style="border-color:var(--gold); color:var(--gold);" onclick="syncToDevice()">SYNC TO KEY</button>
+    </div>
+  </div>
+
+  <div class="portfolio-banner">
+    <div>
+      <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">TOTAL ACTIVE PORTFOLIO VALUE (USD)</div>
+      <div class="val-large" id="totalPortfolio">$0.00</div>
+    </div>
+    <div style="text-align: right;">
+      <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 4px;">CONNECTION STATUS</div>
+      <div id="connStatus" style="font-size: 14px; color: var(--gold); font-family: monospace;">NOT CONNECTED</div>
+    </div>
+  </div>
+
+  <h2 style="font-size: 14px; color: var(--text-dim); margin-bottom: 12px; letter-spacing: 1px;">SELECT ASSETS & CONFIGURE HOLDINGS (24 SUPPORTED COINS)</h2>
+
+  <div class="grid" id="coinsGrid">
+    <!-- Coin cards injected here -->
+  </div>
+
+  <div class="status-bar">
+    <span id="logMsg">Ready. Connect your Crypto TKey S3 over USB.</span>
+    <span>Zero RF Mode • USB CDC Bridge • CoinGecko REST v3</span>
+  </div>
+
+  <script>
+    const COINS = [
+      { id: "bitcoin", sym: "BTC", name: "Bitcoin", price: 68450.0, chg: 3.2, bal: 0.085, en: true },
+      { id: "ethereum", sym: "ETH", name: "Ethereum", price: 3540.0, chg: 1.8, bal: 1.45, en: true },
+      { id: "solana", sym: "SOL", name: "Solana", price: 152.4, chg: 5.6, bal: 14.8, en: true },
+      { id: "litecoin", sym: "LTC", name: "Litecoin", price: 78.5, chg: -0.4, bal: 8.25, en: true },
+      { id: "dogecoin", sym: "DOGE", name: "Dogecoin", price: 0.145, chg: 7.1, bal: 2500.0, en: true },
+      { id: "cardano", sym: "ADA", name: "Cardano", price: 0.48, chg: 0.9, bal: 0.0, en: false },
+      { id: "ripple", sym: "XRP", name: "Ripple", price: 0.58, chg: -1.2, bal: 0.0, en: false },
+      { id: "avalanche-2", sym: "AVAX", name: "Avalanche", price: 28.9, chg: 2.1, bal: 0.0, en: false },
+      { id: "polkadot", sym: "DOT", name: "Polkadot", price: 6.85, chg: -0.5, bal: 0.0, en: false },
+      { id: "chainlink", sym: "LINK", name: "Chainlink", price: 17.2, chg: 4.3, bal: 0.0, en: false },
+      { id: "matic-network", sym: "POL", name: "Polygon", price: 0.54, chg: 1.1, bal: 0.0, en: false },
+      { id: "cosmos", sym: "ATOM", name: "Cosmos", price: 6.4, chg: -2.0, bal: 0.0, en: false },
+      { id: "tron", sym: "TRX", name: "TRON", price: 0.155, chg: 0.3, bal: 0.0, en: false },
+      { id: "near", sym: "NEAR", name: "NEAR Protocol", price: 4.8, chg: 3.8, bal: 0.0, en: false },
+      { id: "kaspa", sym: "KAS", name: "Kaspa", price: 0.165, chg: 8.4, bal: 0.0, en: false },
+      { id: "sui", sym: "SUI", name: "Sui", price: 1.85, chg: 6.2, bal: 0.0, en: false },
+      { id: "aptos", sym: "APT", name: "Aptos", price: 8.2, chg: 1.5, bal: 0.0, en: false },
+      { id: "the-open-network", sym: "TON", name: "Toncoin", price: 5.6, chg: -0.8, bal: 0.0, en: false },
+      { id: "stellar", sym: "XLM", name: "Stellar", price: 0.115, chg: 0.2, bal: 0.0, en: false },
+      { id: "bitcoin-cash", sym: "BCH", name: "Bitcoin Cash", price: 345.0, chg: 1.9, bal: 0.0, en: false },
+      { id: "binancecoin", sym: "BNB", name: "BNB Chain", price: 580.0, chg: 0.7, bal: 0.0, en: false },
+      { id: "shiba-inu", sym: "SHIB", name: "Shiba Inu", price: 0.000018, chg: 4.1, bal: 0.0, en: false },
+      { id: "uniswap", sym: "UNI", name: "Uniswap", price: 7.8, chg: -1.5, bal: 0.0, en: false },
+      { id: "monero", sym: "XMR", name: "Monero", price: 158.0, chg: 0.4, bal: 0.0, en: false }
+    ];
+
+    let port = null;
+    let writer = null;
+
+    function renderCards() {
+      const grid = document.getElementById("coinsGrid");
+      grid.innerHTML = "";
+      let totalUsd = 0;
+
+      COINS.forEach((coin, idx) => {
+        const card = document.createElement("div");
+        card.className = "card" + (coin.en ? " active" : "");
+        const fiat = coin.en ? (coin.bal * coin.price) : 0;
+        totalUsd += fiat;
+
+        card.innerHTML = `
+          <div class="card-top">
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+              <input type="checkbox" ${coin.en ? "checked" : ""} onchange="toggleCoin(${idx}, this.checked)">
+              <span class="sym">${coin.sym}</span>
+              <span style="font-size:12px; color:var(--text-dim);">${coin.name}</span>
+            </label>
+            <div style="text-align:right;">
+              <div class="price">$${coin.price < 1 ? coin.price.toFixed(6) : coin.price.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</div>
+              <div class="${coin.chg >= 0 ? "chg-pos" : "chg-neg"}">${coin.chg >= 0 ? "+" : ""}${coin.chg.toFixed(1)}%</div>
+            </div>
+          </div>
+          <div class="bal-row">
+            <span style="font-size:11px; color:var(--text-dim); width:60px;">HOLDING:</span>
+            <input type="number" step="any" class="bal-input" value="${coin.bal}" onchange="updateBal(${idx}, this.value)">
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--gold); margin-top:4px;">
+            <span>ASSET VALUE:</span>
+            <span>$${fiat.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+
+      document.getElementById("totalPortfolio").innerText = "$" + totalUsd.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+    }
+
+    function toggleCoin(idx, val) {
+      COINS[idx].en = val;
+      renderCards();
+    }
+
+    function updateBal(idx, val) {
+      COINS[idx].bal = parseFloat(val) || 0;
+      renderCards();
+    }
+
+    async function fetchLivePrices() {
+      document.getElementById("logMsg").innerText = "Fetching live CoinGecko prices...";
+      const ids = COINS.map(c => c.id).join(",");
+      try {
+        const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`);
+        const data = await res.json();
+        COINS.forEach(c => {
+          if (data[c.id]) {
+            if (data[c.id].usd !== undefined) c.price = data[c.id].usd;
+            if (data[c.id].usd_24h_change !== undefined) c.chg = data[c.id].usd_24h_change;
+          }
+        });
+        renderCards();
+        document.getElementById("logMsg").innerText = "Live prices successfully updated from CoinGecko!";
+      } catch (err) {
+        document.getElementById("logMsg").innerText = "Failed to fetch prices: " + err.message;
+      }
+    }
+
+    async function connectUsb() {
+      if (!("serial" in navigator)) {
+        alert("Web Serial is supported in Chrome, Brave, and Edge. Please use a Chromium browser.");
+        return;
+      }
+      try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        writer = port.writable.getWriter();
+        document.getElementById("connStatus").innerText = "CONNECTED (USB CDC)";
+        document.getElementById("connStatus").style.color = "var(--green)";
+        document.getElementById("btnConnect").innerText = "DISCONNECT";
+        document.getElementById("logMsg").innerText = "Connected to Crypto TKey S3!";
+      } catch (err) {
+        document.getElementById("logMsg").innerText = "Connection cancelled: " + err.message;
+      }
+    }
+
+    async function syncToDevice() {
+      if (!writer) {
+        alert("Please connect the Crypto TKey S3 over USB first.");
+        return;
+      }
+      document.getElementById("logMsg").innerText = "Streaming portfolio and prices to dongle...";
+      const enc = new TextEncoder();
+      for (const c of COINS) {
+        // 1. Enable / disable
+        await writer.write(enc.encode(`${c.en ? "enable" : "disable"} ${c.sym}\n`));
+        // 2. Balance
+        await writer.write(enc.encode(`setbal ${c.sym} ${c.bal}\n`));
+        // 3. Price
+        await writer.write(enc.encode(`setprice ${c.sym} ${c.price} ${c.chg.toFixed(2)}\n`));
+        await new Promise(r => setTimeout(r, 20));
+      }
+      document.getElementById("logMsg").innerText = "✅ Successfully synchronized all 24 coins to Crypto TKey S3!";
+    }
+
+    renderCards();
+  </script>
+</body>
+</html>
