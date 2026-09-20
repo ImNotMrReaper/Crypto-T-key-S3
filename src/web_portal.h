@@ -3,6 +3,11 @@
  * ==============================================================================
  * Broadcasts "T-Key-Setup" at 192.168.4.1 for initial onboarding, custom PIN,
  * duress PIN, multi-network Wi-Fi setup, 24-coin selection, and seed generation.
+ * Follows embedded-setup-portal-dev skill standards:
+ *  - Zero mnemonic seed transmission over HTTP (Air-gapped on-screen only)
+ *  - Asynchronous Wi-Fi network scanner (/scan)
+ *  - Captive OS probe redirection (iOS hotspot-detect, Android generate_204)
+ *  - Full thermal radio shutdown upon saving
  */
 
 #pragma once
@@ -29,6 +34,7 @@ public:
 
 private:
     void handleRoot();
+    void handleScan();
     void handleSave();
     void handleNotFound();
 
@@ -39,6 +45,6 @@ private:
 
     bool _isRunning = false;
     bool _setupDone = false;
-    char _newPin[8] = "1234";
-    char _newDuressPin[8] = "9999";
+    char _newPin[16] = "1234";
+    char _newDuressPin[16] = "8888";
 };
