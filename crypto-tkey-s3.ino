@@ -39,6 +39,8 @@ __attribute__((constructor(101))) void pre_init_early() {
 #include "src/crypto_coins.h"
 #include "src/seed_gen.h"
 #include "src/portfolio_mgr.h"
+#include "src/wifi_manager.h"
+#include "src/web_portal.h"
 
 // ─── Subsystem Allocations (Dynamic Initialization) ──────────────────────────
 TFT_eSPI*     tft    = nullptr;
@@ -46,6 +48,8 @@ RgbStatus     rgb;
 ButtonCadence btn;
 UiEngine      ui;
 CryptoWallet* wallet = nullptr;
+WifiManager*  wifi   = nullptr;
+WebPortal*    portal = nullptr;
 Preferences   vaultPrefs;
 
 // ─── Global State ────────────────────────────────────────────────────────────
@@ -126,13 +130,28 @@ void setup() {
     // 6. Portfolio & Seed Engines
     PortfolioManager::init();
     SeedGenerator::init();
+    wifi = new WifiManager();
+    wifi->begin();
+    portal = new WebPortal();
 
     // 7. Security Config
     loadSecurityConfig();
 
-    deviceState = STATE_IDLE_READY;
-    ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
-    rgb.setMode(LED_MODE_BREATHE_CYAN);
+    vaultPrefs.begin("vault_sec", true);
+    bool isProvisioned = vaultPrefs.getBool("provisioned", false);
+    vaultPrefs.end();
+
+    if (!isProvisioned || btn.isPressedNow()) {
+        deviceState = STATE_SETUP_WALKTHROUGH;
+        portal->begin(wallet, wifi);
+        ui.renderOobeWizard(1, "T-KEY SETUP", "SSID: T-Key-Setup", "GO TO: 192.168.4.1");
+        rgb.setMode(LED_MODE_SOLID_AMBER);
+        Serial.println("[BOOT] 🌐 SoftAP Setup Portal launched at 192.168.4.1");
+    } else {
+        deviceState = STATE_IDLE_READY;
+        ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
+        rgb.setMode(LED_MODE_BREATHE_CYAN);
+    }
 
     Serial.println("[BOOT] ✅ Crypto TKey S3 Ready. Pure Security Key & Crypto Vault Active.");
     Serial.println("========================================================\n");
@@ -143,6 +162,28 @@ void loop() {
     ButtonEvent ev = btn.update();
     rgb.update();
     ctapHid.process();
+    if (wifi) wifi->update();
+
+    if (portal && portal->isRunning()) {
+        portal->update();
+        if (portal->isSetupDone()) {
+            strncpy(masterPin, portal->getNewPin(), PIN_LENGTH);
+            vaultPrefs.begin("vault_sec", false);
+            vaultPrefs.putString("user_pin", masterPin);
+            vaultPrefs.putString("duress_pin", portal->getNewDuressPin());
+            vaultPrefs.putBool("provisioned", true);
+            vaultPrefs.end();
+
+            portal->stop();
+            rgb.flashSuccess();
+            ui.renderSuccessBanner("VAULT PROVISIONED", "LAUNCHING KEY");
+            delay(1500);
+
+            deviceState = STATE_IDLE_READY;
+            rgb.setMode(LED_MODE_BREATHE_CYAN);
+            ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
+        }
+    }
 
     bool userActive = (ev != BTN_NONE);
     PowerManager::update(userActive);
@@ -150,6 +191,15 @@ void loop() {
     handleSerialCommands();
 
     switch (deviceState) {
+        case STATE_SETUP_WALKTHROUGH:
+            if (ev == BTN_DOUBLE_CLICK) {
+                // Cancel setup portal
+                portal->stop();
+                deviceState = STATE_IDLE_READY;
+                rgb.setMode(LED_MODE_BREATHE_CYAN);
+                ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
+            }
+            break;
         case STATE_IDLE_READY:
             processIdleReadyState(ev);
             break;
