@@ -163,14 +163,17 @@ void setup() {
     ctapHid.begin();
     ctap2Engine.begin();
     ctap2Engine.setUserPresencePrompt(handleUserPresencePrompt);
+    ctapHid.setCborHandler([](uint32_t cid, const uint8_t* data, uint16_t len) {
+        ctap2Engine.handleCborRequest(cid, data, len);
+    });
+    ctapHid.setMsgHandler([](uint32_t cid, const uint8_t* data, uint16_t len) {
+        ctap2Engine.handleCtap1Msg(cid, data, len);
+    });
     ctapHid.setWinkHandler([](uint32_t cid) {
         Serial.printf("[FIDO2] 😉 WINK identification triggered on CID 0x%08X!\n", cid);
         rgb.flashRainbow(1500);
         if (deviceState == STATE_IDLE_READY) {
             ui.renderSuccessBanner("DEVICE LOCATED", "WINK VERIFIED");
-            delay(800);
-            const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
-            ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
         }
     });
 
@@ -862,6 +865,8 @@ void handleSerialCommands() {
         Serial.println("  led <btc|eth|sol|rainbow>- Test RGB DotStar LED color mode");
         Serial.println("  psbt [scan|parse|sign]   - Air-Gapped MicroSD BIP-174 Bitcoin signer");
         Serial.println("  panic                    - Trigger emergency flash nuke");
+        Serial.println("  decode_evm <hex>         - Clear-sign & inspect EVM transaction (PEPE/EIP-1559)");
+        Serial.println("  sign_evm <hex>           - Clear-sign & display prompt on device screen");
     } else if (cmd.equalsIgnoreCase("status")) {
         Serial.printf("Uptime: %lus | CPU: %dMHz | Vault: %s | Master PIN Len: %d | Active Coins: %d | Rotation: %d\n",
             millis() / 1000, getCpuFrequencyMhz(), wallet->isUnlocked() ? "UNLOCKED" : "LOCKED",

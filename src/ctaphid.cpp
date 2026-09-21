@@ -55,12 +55,21 @@ public:
     }
 
     void _onOutput(uint8_t report_id, const uint8_t* buffer, uint16_t len) override {
-        ctapHid.handleIncomingPacket(buffer, len);
+        if (!buffer || len == 0) return;
+        if (len == 63) {
+            // Linux kernel hidraw stripped leading 0x00 report ID byte; reconstruct full 64-byte CTAPHID packet
+            uint8_t reconstructed[64];
+            reconstructed[0] = 0x00;
+            memcpy(reconstructed + 1, buffer, 63);
+            ctapHid.handleIncomingPacket(reconstructed, 64);
+        } else {
+            ctapHid.handleIncomingPacket(buffer, len);
+        }
     }
 
     bool sendReport(const uint8_t* report) {
         uint32_t start = millis();
-        while (millis() - start < 1000) {
+        while (millis() - start < 500) {
             if (HID.ready()) {
                 if (HID.SendReport(0, report, CTAPHID_PACKET_SIZE)) {
                     return true;
@@ -121,6 +130,7 @@ void CtapHid::handleIncomingPacket(const uint8_t* buffer, uint16_t len) {
         // Initialization packet
         uint8_t cmd = buffer[4] & 0x7F;
         uint16_t totalLen = ((uint16_t)buffer[5] << 8) | buffer[6];
+        Serial.printf("[CTAPHID IN] cid=0x%08X rawCmd=0x%02X len=%u\n", cid, buffer[4], totalLen);
 
         if (totalLen > CTAPHID_MAX_MSG_LEN) {
             sendError(cid, CTAP1_ERR_INVALID_LENGTH);
@@ -141,6 +151,7 @@ void CtapHid::handleIncomingPacket(const uint8_t* buffer, uint16_t len) {
         _lastPacketTime = millis();
 
         if (!_isReceiving) {
+            Serial.printf("[CTAPHID DISPATCH] cmd=0x%02X (hasCborHandler=%d)\n", _rxMsg.cmd, _cborHandler != nullptr);
             dispatchMessage();
         }
     } else {

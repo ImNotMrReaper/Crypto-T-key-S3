@@ -99,11 +99,13 @@ bool Ctap2Engine::isPinValid(const char* candidatePin) const {
 
 void Ctap2Engine::handleCborRequest(uint32_t cid, const uint8_t* req, uint16_t reqLen) {
     if (!req || reqLen == 0) {
+        Serial.println("[CTAP2] ❌ Error: Empty CBOR request");
         ctapHid.sendError(cid, CTAP1_ERR_INVALID_LENGTH);
         return;
     }
 
     uint8_t cmd = req[0];
+    Serial.printf("[CTAP2] 📥 handleCborRequest cmd=0x%02X reqLen=%u on CID 0x%08X\n", cmd, reqLen, cid);
     CborDecoder dec(req + 1, reqLen - 1);
 
     switch (cmd) {
@@ -120,6 +122,7 @@ void Ctap2Engine::handleCborRequest(uint32_t cid, const uint8_t* req, uint16_t r
             handleClientPin(cid, dec);
             break;
         default:
+            Serial.printf("[CTAP2] ⚠️ Unsupported cmd=0x%02X\n", cmd);
             uint8_t errResp = CTAP2_ERR_INVALID_CMD;
             ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &errResp, 1);
             break;
@@ -127,6 +130,7 @@ void Ctap2Engine::handleCborRequest(uint32_t cid, const uint8_t* req, uint16_t r
 }
 
 void Ctap2Engine::handleGetInfo(uint32_t cid) {
+    Serial.printf("[CTAP2] 📋 Executing handleGetInfo on CID 0x%08X\n", cid);
     uint8_t respBuf[512];
     respBuf[0] = CTAP2_OK; // Status byte
 
