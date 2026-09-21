@@ -23,7 +23,7 @@ class WifiManager;
 
 class WebPortal {
 public:
-    void begin(CryptoWallet* wallet, WifiManager* wifi);
+    void begin(CryptoWallet* wallet, WifiManager* wifi, bool isProvisioned = false, const char* setupPwdHash = "");
     void update();
     void stop();
     bool isRunning() const { return _isRunning; }
@@ -31,12 +31,15 @@ public:
 
     const char* getNewPin() const { return _newPin; }
     const char* getNewDuressPin() const { return _newDuressPin; }
+    const char* getSetupPasswordHash() const { return _setupPasswordHash; }
 
 private:
     void handleRoot();
+    void handleLogin();
     void handleScan();
     void handleSave();
     void handleNotFound();
+    bool isAuthenticated();
 
     WebServer*   _server = nullptr;
     DNSServer*   _dns = nullptr;
@@ -45,6 +48,11 @@ private:
 
     bool _isRunning = false;
     bool _setupDone = false;
+    bool _isProvisioned = false;
+    bool _authenticated = false;
+
     char _newPin[16] = "1234";
     char _newDuressPin[16] = "8888";
+    char _setupPasswordHash[65] = "";
+    char _storedPasswordHash[65] = "";
 };

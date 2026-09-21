@@ -81,6 +81,7 @@ char reqRecipient[48]  = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh";
 char reqAmount[32]     = "0.054 BTC ($3,450)";
 
 // ─── Forward Declarations ───────────────────────────────────────────────────
+void launchSetupPortal();
 void handleSerialCommands();
 void processIdleReadyState(ButtonEvent ev);
 void processPinEntryState(ButtonEvent ev);
@@ -94,6 +95,19 @@ void resetPinEntry();
 void loadSecurityConfig();
 bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistration);
 void renderCurrentPortfolioCard();
+
+void launchSetupPortal() {
+    vaultPrefs.begin("vault_sec", true);
+    bool isProvisioned = vaultPrefs.getBool("provisioned", false);
+    String setupPwdHash = vaultPrefs.getString("setup_pwd_hash", "");
+    vaultPrefs.end();
+
+    deviceState = STATE_SETUP_WALKTHROUGH;
+    portal->begin(wallet, wifi, isProvisioned, setupPwdHash.c_str());
+    ui.renderOobeWizard(1, "T-KEY SETUP", "SSID: T-Key-Setup", "GO TO: 192.168.4.1");
+    rgb.setMode(LED_MODE_SOFTAP_PULSE);
+    Serial.println("[SETUP] 🌐 SoftAP Setup Portal active at http://192.168.4.1 (SSID: T-Key-Setup)");
+}
 
 // ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
@@ -159,11 +173,7 @@ void setup() {
     vaultPrefs.end();
 
     if (!isProvisioned || btn.isPressedNow()) {
-        deviceState = STATE_SETUP_WALKTHROUGH;
-        portal->begin(wallet, wifi);
-        ui.renderOobeWizard(1, "T-KEY SETUP", "SSID: T-Key-Setup", "GO TO: 192.168.4.1");
-        rgb.setMode(LED_MODE_SOFTAP_PULSE);
-        Serial.println("[BOOT] 🌐 SoftAP Setup Portal launched at 192.168.4.1");
+        launchSetupPortal();
     } else {
         deviceState = STATE_IDLE_READY;
         ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
@@ -188,6 +198,9 @@ void loop() {
             vaultPrefs.begin("vault_sec", false);
             vaultPrefs.putString("user_pin", masterPin);
             vaultPrefs.putString("duress_pin", portal->getNewDuressPin());
+            if (strlen(portal->getSetupPasswordHash()) > 0) {
+                vaultPrefs.putString("setup_pwd_hash", portal->getSetupPasswordHash());
+            }
             vaultPrefs.putBool("provisioned", true);
             vaultPrefs.end();
 
