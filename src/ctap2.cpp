@@ -136,16 +136,17 @@ void Ctap2Engine::handleGetInfo(uint32_t cid) {
 
     CborEncoder enc(respBuf + 1, sizeof(respBuf) - 1);
     
-    // Map with 7 entries (CTAP 2.1 Standard):
+    // Map with 8 entries (CTAP 2.1 Standard):
     // 0x01: versions (["FIDO_2_0", "FIDO_2_1", "U2F_V2"])
     // 0x02: extensions (["hmac-secret"])
     // 0x03: aaguid (bytes)
     // 0x04: options (map: rk: true, up: true, plat: false, clientPin: true)
     // 0x05: maxMsgSize (1024)
+    // 0x06: pinUvAuthProtocols ([1])
     // 0x07: maxCredentialCountInList (8)
-    // 0x0A: pinUvAuthProtocols ([1])
+    // 0x0A: algorithms ([{"type": "public-key", "alg": -7}])
     
-    enc.encodeMapHeader(7);
+    enc.encodeMapHeader(8);
 
     // 0x01: versions
     enc.encodeUnsigned(0x01);
@@ -179,14 +180,23 @@ void Ctap2Engine::handleGetInfo(uint32_t cid) {
     enc.encodeUnsigned(0x05);
     enc.encodeUnsigned(1024);
 
+    // 0x06: pinUvAuthProtocols
+    enc.encodeUnsigned(0x06);
+    enc.encodeArrayHeader(1);
+    enc.encodeUnsigned(1);
+
     // 0x07: maxCredentialCountInList
     enc.encodeUnsigned(0x07);
     enc.encodeUnsigned(8);
 
-    // 0x0A: pinUvAuthProtocols
+    // 0x0A: algorithms (COSE ES256: -7)
     enc.encodeUnsigned(0x0A);
     enc.encodeArrayHeader(1);
-    enc.encodeUnsigned(1);
+    enc.encodeMapHeader(2);
+    enc.encodeText("alg");
+    enc.encodeInt(-7);
+    enc.encodeText("type");
+    enc.encodeText("public-key");
 
     ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, respBuf, 1 + enc.getLength());
 }

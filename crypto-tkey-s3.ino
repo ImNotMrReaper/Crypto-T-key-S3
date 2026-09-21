@@ -1009,6 +1009,7 @@ void handleSerialCommands() {
             Serial.printf("Error: PIN must be between %d and %d digits.\n", PIN_MIN_LENGTH, PIN_MAX_LENGTH);
         }
     } else if (cmd.startsWith("decode_evm ") || cmd.startsWith("sign_evm ")) {
+        bool isSignCmd = cmd.startsWith("sign_evm ");
         String hexTx = cmd.substring(cmd.indexOf(' ') + 1);
         hexTx.trim();
         EvmDecodedTx decoded;
@@ -1021,14 +1022,37 @@ void handleSerialCommands() {
             Serial.printf("  Target:   %s\n", decoded.recipientOrSpender[0] ? decoded.recipientOrSpender : decoded.toAddress);
             Serial.printf("  Fee Est:  %s\n", decoded.dispFee);
 
+            if (decoded.isUnlimitedApproval) {
+                Serial.println("  ⚠️ [ALERT] HIGH RISK: UNLIMITED TOKEN ALLOWANCE DRAINER DETECTED!");
+            }
+
             ui.renderCryptoSignPrompt(decoded.tokenName, 
                                       decoded.recipientOrSpender[0] ? decoded.recipientOrSpender : decoded.toAddress, 
                                       decoded.dispAmount);
             rgb.setMode(LED_MODE_SOLID_AMBER);
+
+            if (isSignCmd) {
+                if (wallet->isUnlocked()) {
+                    char sigHex[130] = {0};
+                    if (wallet->executeSign(sigHex, sizeof(sigHex))) {
+                        Serial.println("[EVM] ✍️ Transaction Signed via secp256k1 (m/44'/60'/0'/0/0):");
+                        Serial.printf("  Signature (r||s): %s\n", sigHex);
+                    } else {
+                        Serial.println("[EVM] ❌ Error executing signature.");
+                    }
+                } else {
+                    Serial.println("[EVM] ⚠️ Vault is LOCKED. Unlock first with 'unlock <PIN>' to generate signature.");
+                }
+            }
         } else {
             Serial.println("[EVM] ❌ Error: Failed to parse RLP transaction stream.");
         }
-    } else if (cmd.equalsIgnoreCase("panic")) {
+    } else if (cmd.equalsIgnoreCase("panic CONFIRM") || cmd.equalsIgnoreCase("panic NUKE")) {
+        Serial.println("[PANIC] 🚨 CONFIRMATION RECEIVED. Executing cryptographic flash scrub...");
         DuressWipe::execute(*tft, rgb, "SERIAL_PANIC");
+    } else if (cmd.equalsIgnoreCase("panic")) {
+        Serial.println("[PANIC] ⚠️ SAFEGUARD GUARD: Accidental execution blocked.");
+        Serial.println("  To completely wipe NVS flash and all cryptographic keys, run: 'panic CONFIRM'");
+        Serial.println("  Or hold the physical device button for >6 seconds.");
     }
 }

@@ -35,6 +35,11 @@ const size_t fido_hid_report_descriptor_len = sizeof(fido_hid_report_descriptor)
 // Static custom USB HID Device
 static USBHID HID;
 
+#define CTAPHID_QUEUE_DEPTH 8
+static uint8_t s_rxQueue[CTAPHID_QUEUE_DEPTH][CTAPHID_PACKET_SIZE];
+static volatile uint8_t s_rxHead = 0;
+static volatile uint8_t s_rxTail = 0;
+
 class FidoHidDevice : public USBHIDDevice {
 public:
     FidoHidDevice() {
@@ -56,14 +61,15 @@ public:
 
     void _onOutput(uint8_t report_id, const uint8_t* buffer, uint16_t len) override {
         if (!buffer || len == 0) return;
-        if (len == 63) {
-            // Linux kernel hidraw stripped leading 0x00 report ID byte; reconstruct full 64-byte CTAPHID packet
-            uint8_t reconstructed[64];
-            reconstructed[0] = 0x00;
-            memcpy(reconstructed + 1, buffer, 63);
-            ctapHid.handleIncomingPacket(reconstructed, 64);
-        } else {
-            ctapHid.handleIncomingPacket(buffer, len);
+        uint8_t nextHead = (s_rxHead + 1) % CTAPHID_QUEUE_DEPTH;
+        if (nextHead != s_rxTail) { // queue not full
+            if (len == 63) {
+                s_rxQueue[s_rxHead][0] = 0x00;
+                memcpy(s_rxQueue[s_rxHead] + 1, buffer, 63);
+            } else {
+                memcpy(s_rxQueue[s_rxHead], buffer, (len > 64) ? 64 : len);
+            }
+            s_rxHead = nextHead;
         }
     }
 
@@ -111,6 +117,14 @@ uint32_t CtapHid::allocateCid() {
 }
 
 void CtapHid::process() {
+    // 1. Drain incoming USB HID packet queue on main application thread
+    while (s_rxTail != s_rxHead) {
+        uint8_t curTail = s_rxTail;
+        handleIncomingPacket(s_rxQueue[curTail], CTAPHID_PACKET_SIZE);
+        s_rxTail = (curTail + 1) % CTAPHID_QUEUE_DEPTH;
+    }
+
+    // 2. Timeout watchdog for fragmented packets
     if (_isReceiving && (millis() - _lastPacketTime > 3000)) {
         sendError(_rxMsg.cid, CTAP1_ERR_TIMEOUT);
         _isReceiving = false;

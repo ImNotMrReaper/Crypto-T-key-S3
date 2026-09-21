@@ -110,6 +110,30 @@ class DeepTester:
         pass2 = "Legacy" in resp2 and "ETH" in resp2 and "0.5000 ETH" in resp2 and "d8da6bf26964af9d7eed9e03e53415d37aa96045" in resp2.lower()
         self.log_result("EVM Engine", "Legacy EIP-155 ETH Transfer Clear-Sign", pass2, "Detected Legacy Envelope + 0.5000 ETH")
 
+        # Vector 3: Unlimited Allowance Drainer (approve uint256.max)
+        approve_tx = "02f86d012b84773594008506fc23ac0082fde8946982508145454ce325ddbe47a25d4ec3d231193380b844095ea7b3000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa96045ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc0"
+        resp3 = self.send_cmd(f"decode_evm {approve_tx}")
+        pass3 = "UNLIMITED TOKEN ALLOWANCE DRAINER DETECTED" in resp3 and "APPROVE PEPE" in resp3
+        self.log_result("EVM Engine", "Allowance Drainer Alert (uint256.max)", pass3, "Flagged UNLIMITED ALLOWANCE / HIGH RISK")
+
+        # Vector 4: Real secp256k1 Signing (sign_evm)
+        self.send_cmd("unlock 1234")
+        resp4 = self.send_cmd(f"sign_evm {pepe_tx}", wait_time=0.6)
+        pass4 = "Transaction Signed via secp256k1" in resp4 and "Signature (r||s):" in resp4
+        self.log_result("EVM Engine", "ECDSA secp256k1 Signing (sign_evm)", pass4, "Derived m/44'/60'/0'/0/0 signature generated")
+        self.send_cmd("lock")
+
+        # Vector 5: RLP Streaming Parser Fuzzing
+        fuzz_malformed = ["02c80101", "02f9ffff0102030405", "7fa012345678", "02"]
+        fuzz_survived = True
+        for fvec in fuzz_malformed:
+            r = self.send_cmd(f"decode_evm {fvec}", wait_time=0.15)
+            if not ("Failed to parse" in r or "EVM" in r):
+                fuzz_survived = False
+        st = self.send_cmd("status", wait_time=0.2)
+        fuzz_survived = fuzz_survived and ("Uptime:" in st)
+        self.log_result("EVM Engine", "Malformed RLP Stream Fuzzing", fuzz_survived, "Robust error recovery without crash")
+
     # ─── 4. BIP-32/BIP-84 Vault Unlock & Derivation ──────────────────────────
     def test_vault_unlock_and_addresses(self):
         print("\n" + "="*60)
@@ -210,9 +234,17 @@ class DeepTester:
                 resp = os.read(active_fd, 64)
                 if len(resp) >= 8:
                     status = resp[7]
+                    total_len = struct.unpack(">H", resp[5:7])[0]
+                    read_so_far = len(resp) - 7
+                    # Drain continuation packets
+                    while read_so_far < total_len:
+                        rr, _, _ = select.select([active_fd], [], [], 0.3)
+                        if not rr: break
+                        c_pkt = os.read(active_fd, 64)
+                        read_so_far += len(c_pkt) - 5
                     if status == 0x00:
                         getinfo_ok = True
-                        details = "Status CTAP2_OK (0x00)"
+                        details = f"Status CTAP2_OK (0x00) — {total_len} bytes info"
                     else:
                         details = f"Status 0x{status:02X}"
             self.log_result("FIDO2 CTAP2", "authenticatorGetInfo (0x04)", getinfo_ok, details)
@@ -241,12 +273,56 @@ class DeepTester:
         except Exception as e:
             self.log_result("FIDO2 CTAP2", "clientPIN getPINRetries (0x06)", False, str(e))
 
+        # CTAP2 clientPIN getKeyAgreement (0x06 subCommand 2)
+        try:
+            cbor_req = bytes([0x06, 0xA2, 0x01, 0x01, 0x02, 0x02])
+            pkt = struct.pack(">IBH", active_cid, CTAPHID_CMD_CBOR, len(cbor_req)) + cbor_req
+            pkt += b"\x00" * (64 - len(pkt))
+            os.write(active_fd, b"\x00" + pkt)
+            r, _, _ = select.select([active_fd], [], [], 1.0)
+            ecdh_ok = False
+            details = "No response"
+            if r:
+                resp = os.read(active_fd, 64)
+                if len(resp) >= 8:
+                    status = resp[7]
+                    total_len = struct.unpack(">H", resp[5:7])[0]
+                    read_so_far = len(resp) - 7
+                    while read_so_far < total_len:
+                        rr, _, _ = select.select([active_fd], [], [], 0.3)
+                        if not rr: break
+                        c_pkt = os.read(active_fd, 64)
+                        read_so_far += len(c_pkt) - 5
+                    if status == 0x00:
+                        ecdh_ok = True
+                        details = f"Status CTAP2_OK (0x00) — {total_len} bytes COSE agreement point"
+                    else:
+                        details = f"Status 0x{status:02X}"
+            self.log_result("FIDO2 CTAP2", "clientPIN getKeyAgreement (0x06)", ecdh_ok, details)
+        except Exception as e:
+            self.log_result("FIDO2 CTAP2", "clientPIN getKeyAgreement (0x06)", False, str(e))
+
         os.close(active_fd)
 
-    # ─── 7. Silicon eFuse Hardening Tool Simulation ──────────────────────────
+    # ─── 7. Air-Gap PSBT & Duress Wipe Confirmation Guards ───────────────────
+    def test_airgap_and_panic_guards(self):
+        print("\n" + "="*60)
+        print(" TEST 7: Air-Gap PSBT & Duress Wipe Safeguards")
+        print("="*60)
+        # PSBT Scan
+        psbt_resp = self.send_cmd("psbt scan")
+        has_psbt = "Found pending unsigned file" in psbt_resp or "No pending unsigned" in psbt_resp
+        self.log_result("Air-Gap PSBT", "MicroSD PSBT Scanner", has_psbt, psbt_resp[:60])
+
+        # Panic Confirmation Guard
+        panic_resp = self.send_cmd("panic")
+        has_guard = "SAFEGUARD GUARD: Accidental execution blocked" in panic_resp and "panic CONFIRM" in panic_resp
+        self.log_result("Duress Security", "Panic Confirmation Safeguard", has_guard, "Blocked accidental unconfirmed erasure")
+
+    # ─── 8. Silicon eFuse Hardening Tool Simulation ──────────────────────────
     def test_efuse_dry_run(self):
         print("\n" + "="*60)
-        print(" TEST 7: ESP32-S3 Silicon eFuse Hardening Tool (Dry-Run)")
+        print(" TEST 8: ESP32-S3 Silicon eFuse Hardening Tool (Dry-Run)")
         print("="*60)
         script = os.path.join(os.path.dirname(__file__), "burn_production_efuses.py")
         if not os.path.exists(script):
@@ -294,6 +370,7 @@ def main():
         tester.test_vault_unlock_and_addresses()
         tester.test_rgb_engine()
         tester.test_fido2_ctaphid()
+        tester.test_airgap_and_panic_guards()
         tester.test_efuse_dry_run()
     finally:
         if tester.ser and tester.ser.is_open:
