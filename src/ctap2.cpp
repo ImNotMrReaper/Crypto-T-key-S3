@@ -40,18 +40,61 @@ static const uint8_t U2F_ATTESTATION_PRIVKEY[32] = {
     0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x07
 };
 
-Ctap2Engine::Ctap2Engine() : _upPrompt(nullptr) {
+#include <Preferences.h>
+
+Ctap2Engine::Ctap2Engine() 
+    : _upPrompt(nullptr), _pinRetries(8), _hasEphemKey(false), _pinTokenValid(false) {
     memcpy(_aaguid, TKEY_AAGUID, 16);
+    strncpy(_masterPin, "1234", sizeof(_masterPin) - 1);
+    mbedtls_platform_zeroize(_ephemPrivKey, sizeof(_ephemPrivKey));
+    mbedtls_platform_zeroize(_ephemPubKeyRaw, sizeof(_ephemPubKeyRaw));
+    mbedtls_platform_zeroize(_pinToken, sizeof(_pinToken));
 }
 
 void Ctap2Engine::begin() {
     cryptoP256.begin();
+
+    Preferences prefs;
+    prefs.begin("fido_vault", false);
+    _pinRetries = (uint8_t)prefs.getUInt("pin_retries", 8);
+    prefs.end();
+
+    prefs.begin("vault_sec", true);
+    String savedPin = prefs.getString("user_pin", "1234");
+    strncpy(_masterPin, savedPin.c_str(), sizeof(_masterPin) - 1);
+    _masterPin[sizeof(_masterPin) - 1] = '\0';
+    prefs.end();
+
     ctapHid.setCborHandler([](uint32_t cid, const uint8_t* req, uint16_t reqLen) {
         ctap2Engine.handleCborRequest(cid, req, reqLen);
     });
     ctapHid.setMsgHandler([](uint32_t cid, const uint8_t* req, uint16_t reqLen) {
         ctap2Engine.handleCtap1Msg(cid, req, reqLen);
     });
+}
+
+void Ctap2Engine::setMasterPin(const char* pin) {
+    if (!pin) return;
+    strncpy(_masterPin, pin, sizeof(_masterPin) - 1);
+    _masterPin[sizeof(_masterPin) - 1] = '\0';
+
+    Preferences prefs;
+    prefs.begin("vault_sec", false);
+    prefs.putString("user_pin", _masterPin);
+    prefs.end();
+}
+
+void Ctap2Engine::resetPinRetries() {
+    _pinRetries = 8;
+    Preferences prefs;
+    prefs.begin("fido_vault", false);
+    prefs.putUInt("pin_retries", _pinRetries);
+    prefs.end();
+}
+
+bool Ctap2Engine::isPinValid(const char* candidatePin) const {
+    if (!candidatePin) return false;
+    return (strcmp(_masterPin, candidatePin) == 0);
 }
 
 void Ctap2Engine::handleCborRequest(uint32_t cid, const uint8_t* req, uint16_t reqLen) {
@@ -73,6 +116,9 @@ void Ctap2Engine::handleCborRequest(uint32_t cid, const uint8_t* req, uint16_t r
         case CTAP2_CMD_GET_ASSERTION:
             handleGetAssertion(cid, dec);
             break;
+        case CTAP2_CMD_CLIENT_PIN:
+            handleClientPin(cid, dec);
+            break;
         default:
             uint8_t errResp = CTAP2_ERR_INVALID_CMD;
             ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &errResp, 1);
@@ -86,15 +132,16 @@ void Ctap2Engine::handleGetInfo(uint32_t cid) {
 
     CborEncoder enc(respBuf + 1, sizeof(respBuf) - 1);
     
-    // Map with 6 entries (CTAP 2.1 Standard):
+    // Map with 7 entries (CTAP 2.1 Standard):
     // 0x01: versions (["FIDO_2_0", "FIDO_2_1", "U2F_V2"])
     // 0x02: extensions (["hmac-secret"])
     // 0x03: aaguid (bytes)
-    // 0x04: options (map: rk: true, up: true, plat: false)
+    // 0x04: options (map: rk: true, up: true, plat: false, clientPin: true)
     // 0x05: maxMsgSize (1024)
     // 0x07: maxCredentialCountInList (8)
+    // 0x0A: pinUvAuthProtocols ([1])
     
-    enc.encodeMapHeader(6);
+    enc.encodeMapHeader(7);
 
     // 0x01: versions
     enc.encodeUnsigned(0x01);
@@ -114,13 +161,15 @@ void Ctap2Engine::handleGetInfo(uint32_t cid) {
 
     // 0x04: options
     enc.encodeUnsigned(0x04);
-    enc.encodeMapHeader(3);
+    enc.encodeMapHeader(4);
     enc.encodeText("rk");
     enc.encodeBool(true);
     enc.encodeText("up");
     enc.encodeBool(true);
     enc.encodeText("plat");
     enc.encodeBool(false);
+    enc.encodeText("clientPin");
+    enc.encodeBool(true);
 
     // 0x05: maxMsgSize
     enc.encodeUnsigned(0x05);
@@ -129,6 +178,11 @@ void Ctap2Engine::handleGetInfo(uint32_t cid) {
     // 0x07: maxCredentialCountInList
     enc.encodeUnsigned(0x07);
     enc.encodeUnsigned(8);
+
+    // 0x0A: pinUvAuthProtocols
+    enc.encodeUnsigned(0x0A);
+    enc.encodeArrayHeader(1);
+    enc.encodeUnsigned(1);
 
     ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, respBuf, 1 + enc.getLength());
 }
@@ -316,6 +370,9 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
     char rpName[128] = {0};
     const uint8_t* userId = nullptr;
     size_t userIdLen = 0;
+    const uint8_t* pinUvAuthParam = nullptr;
+    size_t pinUvAuthParamLen = 0;
+    uint64_t pinUvAuthProtocol = 0;
 
     for (size_t i = 0; i < mapCount; i++) {
         uint64_t key = 0;
@@ -360,6 +417,12 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
                 }
                 break;
             }
+            case 0x08: // pinUvAuthParam
+                dec.readBytes(&pinUvAuthParam, &pinUvAuthParamLen);
+                break;
+            case 0x0A: // pinUvAuthProtocol
+                dec.readUnsigned(&pinUvAuthProtocol);
+                break;
             default:
                 dec.skipValue();
                 break;
@@ -370,6 +433,24 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
         uint8_t err = CTAP2_ERR_INVALID_PARAM;
         ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
         return;
+    }
+
+    // Verify PIN Auth if presented
+    bool uvVerified = false;
+    if (pinUvAuthParam && pinUvAuthParamLen == 16) {
+        if (!_pinTokenValid) {
+            uint8_t err = CTAP2_ERR_PIN_AUTH_INVALID;
+            ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+            return;
+        }
+        uint8_t expAuth[32];
+        CryptoP256::hmacSha256(_pinToken, 32, clientDataHash, clientDataHashLen, expAuth);
+        if (memcmp(pinUvAuthParam, expAuth, 16) != 0) {
+            uint8_t err = CTAP2_ERR_PIN_AUTH_INVALID;
+            ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+            return;
+        }
+        uvVerified = true;
     }
 
     // Physical User Presence Verification (UP) - Fail Closed
@@ -410,7 +491,7 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
     CryptoP256::sha256((const uint8_t*)rpId, strlen(rpId), authData + adOffset);
     adOffset += 32;
 
-    authData[adOffset++] = AUTHDATA_FLAG_UP | AUTHDATA_FLAG_AT; // UP=1, AT=1
+    authData[adOffset++] = AUTHDATA_FLAG_UP | (uvVerified ? AUTHDATA_FLAG_UV : 0) | AUTHDATA_FLAG_AT;
 
     uint32_t counter = cryptoP256.incrementSignatureCounter();
     authData[adOffset++] = (uint8_t)(counter >> 24);
@@ -462,6 +543,9 @@ void Ctap2Engine::handleGetAssertion(uint32_t cid, CborDecoder& dec) {
     size_t clientDataHashLen = 0;
     const uint8_t* targetCredId = nullptr;
     size_t targetCredIdLen = 0;
+    const uint8_t* pinUvAuthParam = nullptr;
+    size_t pinUvAuthParamLen = 0;
+    uint64_t pinUvAuthProtocol = 0;
 
     for (size_t i = 0; i < mapCount; i++) {
         uint64_t key = 0;
@@ -497,6 +581,12 @@ void Ctap2Engine::handleGetAssertion(uint32_t cid, CborDecoder& dec) {
                 }
                 break;
             }
+            case 0x06: // pinUvAuthParam
+                dec.readBytes(&pinUvAuthParam, &pinUvAuthParamLen);
+                break;
+            case 0x07: // pinUvAuthProtocol
+                dec.readUnsigned(&pinUvAuthProtocol);
+                break;
             default:
                 dec.skipValue();
                 break;
@@ -507,6 +597,24 @@ void Ctap2Engine::handleGetAssertion(uint32_t cid, CborDecoder& dec) {
         uint8_t err = CTAP2_ERR_INVALID_PARAM;
         ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
         return;
+    }
+
+    // Verify PIN Auth if presented
+    bool uvVerified = false;
+    if (pinUvAuthParam && pinUvAuthParamLen == 16) {
+        if (!_pinTokenValid) {
+            uint8_t err = CTAP2_ERR_PIN_AUTH_INVALID;
+            ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+            return;
+        }
+        uint8_t expAuth[32];
+        CryptoP256::hmacSha256(_pinToken, 32, clientDataHash, clientDataHashLen, expAuth);
+        if (memcmp(pinUvAuthParam, expAuth, 16) != 0) {
+            uint8_t err = CTAP2_ERR_PIN_AUTH_INVALID;
+            ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+            return;
+        }
+        uvVerified = true;
     }
 
     // Verify and recover private key from credential ID
@@ -535,7 +643,7 @@ void Ctap2Engine::handleGetAssertion(uint32_t cid, CborDecoder& dec) {
     // 1. Build AuthData: rpIdHash (32) || flags (1) || signCount (4)
     uint8_t authData[37];
     CryptoP256::sha256((const uint8_t*)rpId, strlen(rpId), authData);
-    authData[32] = AUTHDATA_FLAG_UP; // UP=1
+    authData[32] = AUTHDATA_FLAG_UP | (uvVerified ? AUTHDATA_FLAG_UV : 0);
 
     uint32_t counter = cryptoP256.incrementSignatureCounter();
     authData[33] = (uint8_t)(counter >> 24);
@@ -576,4 +684,264 @@ void Ctap2Engine::handleGetAssertion(uint32_t cid, CborDecoder& dec) {
     respEnc.encodeBytes(sigDer, sigLen);
 
     ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, respBuf, 1 + respEnc.getLength());
+}
+
+void Ctap2Engine::handleClientPin(uint32_t cid, CborDecoder& dec) {
+    size_t mapCount = 0;
+    if (!dec.readMapHeader(&mapCount)) {
+        uint8_t err = CTAP2_ERR_INVALID_PARAM;
+        ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+        return;
+    }
+
+    uint64_t pinUvAuthProtocol = 0;
+    uint64_t subCommand = 0;
+    const uint8_t* pinUvAuthParam = nullptr;
+    size_t pinUvAuthParamLen = 0;
+    const uint8_t* newPinEnc = nullptr;
+    size_t newPinEncLen = 0;
+    const uint8_t* pinHashEnc = nullptr;
+    size_t pinHashEncLen = 0;
+    uint8_t peerPubRaw[64] = {0};
+    bool hasPeerKey = false;
+
+    for (size_t i = 0; i < mapCount; i++) {
+        uint64_t key = 0;
+        if (!dec.readUnsigned(&key)) {
+            dec.skipValue();
+            continue;
+        }
+
+        switch (key) {
+            case 0x01: // pinUvAuthProtocol
+                dec.readUnsigned(&pinUvAuthProtocol);
+                break;
+            case 0x02: // subCommand
+                dec.readUnsigned(&subCommand);
+                break;
+            case 0x03: { // keyAgreement (COSE Key)
+                size_t coseMap = 0;
+                if (dec.readMapHeader(&coseMap)) {
+                    bool haveX = false, haveY = false;
+                    for (size_t c = 0; c < coseMap; c++) {
+                        int64_t coseKey = 0;
+                        if (!dec.readInt(&coseKey)) {
+                            dec.skipValue();
+                            continue;
+                        }
+                        if (coseKey == -2) { // x coordinate
+                            const uint8_t* xPtr = nullptr;
+                            size_t xLen = 0;
+                            if (dec.readBytes(&xPtr, &xLen) && xLen == 32) {
+                                memcpy(peerPubRaw, xPtr, 32);
+                                haveX = true;
+                            }
+                        } else if (coseKey == -3) { // y coordinate
+                            const uint8_t* yPtr = nullptr;
+                            size_t yLen = 0;
+                            if (dec.readBytes(&yPtr, &yLen) && yLen == 32) {
+                                memcpy(peerPubRaw + 32, yPtr, 32);
+                                haveY = true;
+                            }
+                        } else {
+                            dec.skipValue();
+                        }
+                    }
+                    hasPeerKey = (haveX && haveY);
+                }
+                break;
+            }
+            case 0x04: // pinUvAuthParam
+                dec.readBytes(&pinUvAuthParam, &pinUvAuthParamLen);
+                break;
+            case 0x05: // newPinEnc
+                dec.readBytes(&newPinEnc, &newPinEncLen);
+                break;
+            case 0x06: // pinHashEnc
+                dec.readBytes(&pinHashEnc, &pinHashEncLen);
+                break;
+            default:
+                dec.skipValue();
+                break;
+        }
+    }
+
+    if (pinUvAuthProtocol != 0 && pinUvAuthProtocol != 1) {
+        uint8_t err = CTAP2_ERR_UNSUPPORTED_OPTION;
+        ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+        return;
+    }
+
+    switch (subCommand) {
+        case CTAP2_PIN_SUBCMD_GET_PIN_RETRIES: {
+            uint8_t respBuf[64];
+            respBuf[0] = CTAP2_OK;
+            CborEncoder enc(respBuf + 1, sizeof(respBuf) - 1);
+            enc.encodeMapHeader(2);
+            enc.encodeUnsigned(0x03); // pinRetries
+            enc.encodeUnsigned(_pinRetries);
+            enc.encodeUnsigned(0x05); // powerCycleState
+            enc.encodeBool(false);
+            ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, respBuf, 1 + enc.getLength());
+            break;
+        }
+
+        case CTAP2_PIN_SUBCMD_GET_KEY_AGREEMENT: {
+            cryptoP256.getRandomBytes(_ephemPrivKey, 32);
+            cryptoP256.generateKeypair(_ephemPrivKey, _ephemPubKeyRaw);
+            _hasEphemKey = true;
+
+            uint8_t respBuf[256];
+            respBuf[0] = CTAP2_OK;
+            CborEncoder enc(respBuf + 1, sizeof(respBuf) - 1);
+            enc.encodeMapHeader(1);
+            enc.encodeUnsigned(0x01); // keyAgreement
+            enc.encodeMapHeader(5);
+            enc.encodeInt(1);  // kty
+            enc.encodeInt(2);  // EC2
+            enc.encodeInt(3);  // alg
+            enc.encodeInt(-7); // ES256
+            enc.encodeInt(-1); // crv
+            enc.encodeInt(1);  // P-256
+            enc.encodeInt(-2); // x
+            enc.encodeBytes(_ephemPubKeyRaw, 32);
+            enc.encodeInt(-3); // y
+            enc.encodeBytes(_ephemPubKeyRaw + 32, 32);
+
+            ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, respBuf, 1 + enc.getLength());
+            break;
+        }
+
+        case CTAP2_PIN_SUBCMD_GET_PIN_TOKEN: {
+            if (!_hasEphemKey || !hasPeerKey || !pinHashEnc || pinHashEncLen != 16) {
+                uint8_t err = CTAP2_ERR_INVALID_PARAM;
+                ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+                return;
+            }
+
+            if (_pinRetries == 0) {
+                uint8_t err = CTAP2_ERR_PIN_BLOCKED;
+                ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+                return;
+            }
+
+            uint8_t sharedKey[32];
+            if (!cryptoP256.computeSharedSecretP256(_ephemPrivKey, peerPubRaw, sharedKey)) {
+                uint8_t err = CTAP2_ERR_OTHER;
+                ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+                return;
+            }
+
+            uint8_t candHash[16];
+            CryptoP256::aes256CbcDecrypt(sharedKey, NULL, pinHashEnc, 16, candHash);
+
+            uint8_t fullHash[32];
+            CryptoP256::sha256((const uint8_t*)_masterPin, strlen(_masterPin), fullHash);
+
+            uint8_t diff = 0;
+            for (int i = 0; i < 16; i++) {
+                diff |= (candHash[i] ^ fullHash[i]);
+            }
+
+            if (diff == 0) {
+                resetPinRetries();
+                cryptoP256.getRandomBytes(_pinToken, 32);
+                _pinTokenValid = true;
+
+                uint8_t encToken[32];
+                CryptoP256::aes256CbcEncrypt(sharedKey, NULL, _pinToken, 32, encToken);
+                mbedtls_platform_zeroize(sharedKey, sizeof(sharedKey));
+
+                uint8_t respBuf[128];
+                respBuf[0] = CTAP2_OK;
+                CborEncoder enc(respBuf + 1, sizeof(respBuf) - 1);
+                enc.encodeMapHeader(1);
+                enc.encodeUnsigned(0x02); // pinToken
+                enc.encodeBytes(encToken, 32);
+                ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, respBuf, 1 + enc.getLength());
+            } else {
+                mbedtls_platform_zeroize(sharedKey, sizeof(sharedKey));
+                if (_pinRetries > 0) _pinRetries--;
+                Preferences prefs;
+                prefs.begin("fido_vault", false);
+                prefs.putUInt("pin_retries", _pinRetries);
+                prefs.end();
+
+                uint8_t err = (_pinRetries == 0) ? CTAP2_ERR_PIN_BLOCKED : CTAP2_ERR_PIN_INVALID;
+                ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+            }
+            break;
+        }
+
+        case CTAP2_PIN_SUBCMD_CHANGE_PIN: {
+            if (!_hasEphemKey || !hasPeerKey || !newPinEnc || newPinEncLen != 64 ||
+                !pinHashEnc || pinHashEncLen != 16 || !pinUvAuthParam || pinUvAuthParamLen != 16) {
+                uint8_t err = CTAP2_ERR_INVALID_PARAM;
+                ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+                return;
+            }
+
+            uint8_t sharedKey[32];
+            if (!cryptoP256.computeSharedSecretP256(_ephemPrivKey, peerPubRaw, sharedKey)) {
+                uint8_t err = CTAP2_ERR_OTHER;
+                ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+                return;
+            }
+
+            uint8_t expAuth[32];
+            CryptoP256::hmacSha256(sharedKey, 32, newPinEnc, 64, expAuth);
+            if (memcmp(pinUvAuthParam, expAuth, 16) != 0) {
+                mbedtls_platform_zeroize(sharedKey, sizeof(sharedKey));
+                uint8_t err = CTAP2_ERR_PIN_AUTH_INVALID;
+                ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+                return;
+            }
+
+            uint8_t candHash[16];
+            CryptoP256::aes256CbcDecrypt(sharedKey, NULL, pinHashEnc, 16, candHash);
+            uint8_t fullHash[32];
+            CryptoP256::sha256((const uint8_t*)_masterPin, strlen(_masterPin), fullHash);
+            if (memcmp(candHash, fullHash, 16) != 0) {
+                mbedtls_platform_zeroize(sharedKey, sizeof(sharedKey));
+                if (_pinRetries > 0) _pinRetries--;
+                uint8_t err = (_pinRetries == 0) ? CTAP2_ERR_PIN_BLOCKED : CTAP2_ERR_PIN_INVALID;
+                ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+                return;
+            }
+
+            uint8_t decPin[64];
+            CryptoP256::aes256CbcDecrypt(sharedKey, NULL, newPinEnc, 64, decPin);
+            mbedtls_platform_zeroize(sharedKey, sizeof(sharedKey));
+
+            char newPinStr[16] = {0};
+            int pLen = 0;
+            while (pLen < 8 && decPin[pLen] >= '0' && decPin[pLen] <= '9') {
+                newPinStr[pLen] = (char)decPin[pLen];
+                pLen++;
+            }
+            mbedtls_platform_zeroize(decPin, sizeof(decPin));
+
+            if (pLen < 4 || pLen > 8) {
+                uint8_t err = CTAP2_ERR_PIN_POLICY_VIOLATION;
+                ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+                return;
+            }
+
+            setMasterPin(newPinStr);
+            resetPinRetries();
+
+            uint8_t respBuf[16];
+            respBuf[0] = CTAP2_OK;
+            CborEncoder enc(respBuf + 1, sizeof(respBuf) - 1);
+            enc.encodeMapHeader(0);
+            ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, respBuf, 1 + enc.getLength());
+            break;
+        }
+
+        default: {
+            uint8_t err = CTAP2_ERR_UNSUPPORTED_OPTION;
+            ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+            break;
+        }
+    }
 }

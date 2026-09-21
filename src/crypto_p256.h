@@ -36,6 +36,11 @@ public:
     // ECDSA Signing & Verification (secp256r1)
     bool signDigest(const uint8_t* privKey, const uint8_t* digest, uint8_t* sigOutDer, size_t* sigLen);
 
+    // NIST P-256 ECDH & Symmetric Encryption (PIN Protocol 1)
+    bool computeSharedSecretP256(const uint8_t* privKey32, const uint8_t* peerPubKeyRaw64, uint8_t* sharedSecretOut32);
+    static bool aes256CbcDecrypt(const uint8_t* key32, const uint8_t* iv16, const uint8_t* in, size_t len, uint8_t* out);
+    static bool aes256CbcEncrypt(const uint8_t* key32, const uint8_t* iv16, const uint8_t* in, size_t len, uint8_t* out);
+
     // Monotonic Replay Protection Counter
     uint32_t getSignatureCounter();
     uint32_t incrementSignatureCounter();

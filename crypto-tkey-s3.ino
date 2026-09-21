@@ -42,6 +42,7 @@ __attribute__((constructor(101))) void pre_init_early() {
 #include "src/wifi_manager.h"
 #include "src/web_portal.h"
 #include "src/psbt_signer.h"
+#include "src/evm_decoder.h"
 
 // ─── Subsystem Allocations (Dynamic Initialization) ──────────────────────────
 TFT_eSPI*     tft    = nullptr;
@@ -221,6 +222,8 @@ void loop() {
             }
             vaultPrefs.putBool("provisioned", true);
             vaultPrefs.end();
+
+            ctap2Engine.setMasterPin(masterPin);
 
             portal->stop();
             rgb.flashRainbow(800);
@@ -823,6 +826,8 @@ void loadSecurityConfig() {
     if (masterPinLen < PIN_MIN_LENGTH) masterPinLen = PIN_MIN_LENGTH;
     if (masterPinLen > PIN_MAX_LENGTH) masterPinLen = PIN_MAX_LENGTH;
     vaultPrefs.end();
+
+    ctap2Engine.setMasterPin(masterPin);
 }
 
 void handleSerialCommands() {
@@ -993,9 +998,30 @@ void handleSerialCommands() {
             vaultPrefs.begin("vault_sec", false);
             vaultPrefs.putString("user_pin", masterPin);
             vaultPrefs.end();
+            ctap2Engine.setMasterPin(masterPin);
             Serial.printf("Master PIN successfully changed to: %s (%d digits)\n", masterPin, masterPinLen);
         } else {
             Serial.printf("Error: PIN must be between %d and %d digits.\n", PIN_MIN_LENGTH, PIN_MAX_LENGTH);
+        }
+    } else if (cmd.startsWith("decode_evm ") || cmd.startsWith("sign_evm ")) {
+        String hexTx = cmd.substring(cmd.indexOf(' ') + 1);
+        hexTx.trim();
+        EvmDecodedTx decoded;
+        if (wallet && wallet->parseAndPrepareEvmHexTx(hexTx.c_str(), &decoded)) {
+            Serial.println("[EVM] ✅ Clear-Sign Transaction Decoded Successfully:");
+            Serial.printf("  Envelope: %s\n", (decoded.txType == EVM_TX_EIP1559) ? "EIP-1559 (Type 2 Dynamic Fee)" : "Legacy EIP-155 (Type 0)");
+            Serial.printf("  Action:   %s\n", decoded.dispAction);
+            Serial.printf("  Asset:    %s (%s)\n", decoded.tokenName, decoded.tokenSymbol);
+            Serial.printf("  Amount:   %s\n", decoded.dispAmount);
+            Serial.printf("  Target:   %s\n", decoded.recipientOrSpender[0] ? decoded.recipientOrSpender : decoded.toAddress);
+            Serial.printf("  Fee Est:  %s\n", decoded.dispFee);
+
+            ui.renderCryptoSignPrompt(decoded.tokenName, 
+                                      decoded.recipientOrSpender[0] ? decoded.recipientOrSpender : decoded.toAddress, 
+                                      decoded.dispAmount);
+            rgb.setMode(LED_MODE_SOLID_AMBER);
+        } else {
+            Serial.println("[EVM] ❌ Error: Failed to parse RLP transaction stream.");
         }
     } else if (cmd.equalsIgnoreCase("panic")) {
         DuressWipe::execute(*tft, rgb, "SERIAL_PANIC");

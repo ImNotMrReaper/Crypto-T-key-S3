@@ -54,6 +54,8 @@ public:
 
     // Clear-Signing (WYSIWYS) Engine
     bool prepareSignRequest(CryptoCoin coin, const char* to, const char* amt, const char* fee = "Standard");
+    bool parseAndPrepareEvmTx(const uint8_t* rawTx, size_t len, void* outDecoded = nullptr);
+    bool parseAndPrepareEvmHexTx(const char* hexStr, void* outDecoded = nullptr);
     const ClearSignTx& getCurrentRequest() const { return _currentTx; }
     bool executeSign(char* outSigHex, size_t maxLen);
     void cancelSign();

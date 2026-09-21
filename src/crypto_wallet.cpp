@@ -181,6 +181,8 @@ void CryptoWallet::deriveDogeAddress(WalletAccount& acc) {
     }
 }
 
+#include "evm_decoder.h"
+
 // ─── Clear-Signing (WYSIWYS) Engine ──────────────────────────────────────────
 bool CryptoWallet::prepareSignRequest(CryptoCoin coin, const char* to, const char* amt, const char* fee) {
     if (coin >= COIN_COUNT || !to || !amt) return false;
@@ -192,6 +194,60 @@ bool CryptoWallet::prepareSignRequest(CryptoCoin coin, const char* to, const cha
     strncpy(_currentTx.fee, fee ? fee : "0.00021", sizeof(_currentTx.fee) - 1);
     _currentTx.verified = false;
 
+    return true;
+}
+
+bool CryptoWallet::parseAndPrepareEvmTx(const uint8_t* rawTx, size_t len, void* outDecoded) {
+    EvmDecodedTx decoded;
+    if (!EvmTxDecoder::decodeTx(rawTx, len, decoded)) {
+        return false;
+    }
+
+    _currentTx.coin = COIN_ETH;
+    strncpy(_currentTx.chain, decoded.tokenName, sizeof(_currentTx.chain) - 1);
+
+    if (decoded.action == ACTION_ERC20_TRANSFER || decoded.action == ACTION_ERC20_APPROVE) {
+        strncpy(_currentTx.recipient, decoded.recipientOrSpender, sizeof(_currentTx.recipient) - 1);
+        strncpy(_currentTx.amount, decoded.tokenAmount, sizeof(_currentTx.amount) - 1);
+    } else {
+        strncpy(_currentTx.recipient, decoded.toAddress, sizeof(_currentTx.recipient) - 1);
+        strncpy(_currentTx.amount, decoded.valueEth, sizeof(_currentTx.amount) - 1);
+    }
+
+    strncpy(_currentTx.fee, decoded.dispFee, sizeof(_currentTx.fee) - 1);
+    strncpy(_currentTx.memo, decoded.dispAction, sizeof(_currentTx.memo) - 1);
+    _currentTx.verified = false;
+
+    if (outDecoded) {
+        memcpy(outDecoded, &decoded, sizeof(EvmDecodedTx));
+    }
+    return true;
+}
+
+bool CryptoWallet::parseAndPrepareEvmHexTx(const char* hexStr, void* outDecoded) {
+    EvmDecodedTx decoded;
+    if (!EvmTxDecoder::decodeHexTx(hexStr, decoded)) {
+        return false;
+    }
+
+    _currentTx.coin = COIN_ETH;
+    strncpy(_currentTx.chain, decoded.tokenName, sizeof(_currentTx.chain) - 1);
+
+    if (decoded.action == ACTION_ERC20_TRANSFER || decoded.action == ACTION_ERC20_APPROVE) {
+        strncpy(_currentTx.recipient, decoded.recipientOrSpender, sizeof(_currentTx.recipient) - 1);
+        strncpy(_currentTx.amount, decoded.tokenAmount, sizeof(_currentTx.amount) - 1);
+    } else {
+        strncpy(_currentTx.recipient, decoded.toAddress, sizeof(_currentTx.recipient) - 1);
+        strncpy(_currentTx.amount, decoded.valueEth, sizeof(_currentTx.amount) - 1);
+    }
+
+    strncpy(_currentTx.fee, decoded.dispFee, sizeof(_currentTx.fee) - 1);
+    strncpy(_currentTx.memo, decoded.dispAction, sizeof(_currentTx.memo) - 1);
+    _currentTx.verified = false;
+
+    if (outDecoded) {
+        memcpy(outDecoded, &decoded, sizeof(EvmDecodedTx));
+    }
     return true;
 }
 

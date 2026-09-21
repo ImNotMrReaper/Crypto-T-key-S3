@@ -2,6 +2,7 @@
 #include <Preferences.h>
 #include <esp_random.h>
 #include <mbedtls/md.h>
+#include <mbedtls/aes.h>
 #include <mbedtls/platform_util.h>
 
 CryptoP256 cryptoP256;
@@ -271,6 +272,111 @@ bool CryptoP256::signDigest(const uint8_t* privKey, const uint8_t* digest, uint8
     mbedtls_mpi_free(&d);
     mbedtls_ecp_group_free(&grp);
     return true;
+}
+
+bool CryptoP256::computeSharedSecretP256(const uint8_t* privKey32, const uint8_t* peerPubKeyRaw64, uint8_t* sharedSecretOut32) {
+    if (!privKey32 || !peerPubKeyRaw64 || !sharedSecretOut32) return false;
+
+    mbedtls_ecp_group grp;
+    mbedtls_ecp_point Qpeer, P;
+    mbedtls_mpi d;
+
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_ecp_point_init(&Qpeer);
+    mbedtls_ecp_point_init(&P);
+    mbedtls_mpi_init(&d);
+
+    mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1);
+    mbedtls_mpi_read_binary(&d, privKey32, 32);
+
+    uint8_t uncompressed[65];
+    uncompressed[0] = 0x04;
+    memcpy(uncompressed + 1, peerPubKeyRaw64, 64);
+    int ret = mbedtls_ecp_point_read_binary(&grp, &Qpeer, uncompressed, 65);
+    if (ret != 0) {
+        mbedtls_ecp_group_free(&grp);
+        mbedtls_ecp_point_free(&Qpeer);
+        mbedtls_ecp_point_free(&P);
+        mbedtls_mpi_free(&d);
+        return false;
+    }
+
+    ret = mbedtls_ecp_mul(&grp, &P, &d, &Qpeer, NULL, NULL);
+    if (ret != 0 || mbedtls_ecp_is_zero(&P)) {
+        mbedtls_ecp_group_free(&grp);
+        mbedtls_ecp_point_free(&Qpeer);
+        mbedtls_ecp_point_free(&P);
+        mbedtls_mpi_free(&d);
+        return false;
+    }
+
+    // Export X coordinate of shared point P (32 bytes)
+    uint8_t sharedPoint[65];
+    size_t olen = 0;
+    ret = mbedtls_ecp_point_write_binary(&grp, &P, MBEDTLS_ECP_PF_UNCOMPRESSED, &olen, sharedPoint, sizeof(sharedPoint));
+    if (ret != 0 || olen != 65) {
+        mbedtls_ecp_group_free(&grp);
+        mbedtls_ecp_point_free(&Qpeer);
+        mbedtls_ecp_point_free(&P);
+        mbedtls_mpi_free(&d);
+        return false;
+    }
+
+    // Compute sharedKey = SHA-256(Z) as mandated by CTAP2 PIN Protocol 1
+    sha256(sharedPoint + 1, 32, sharedSecretOut32);
+
+    mbedtls_platform_zeroize(sharedPoint, sizeof(sharedPoint));
+    mbedtls_ecp_group_free(&grp);
+    mbedtls_ecp_point_free(&Qpeer);
+    mbedtls_ecp_point_free(&P);
+    mbedtls_mpi_free(&d);
+    return true;
+}
+
+bool CryptoP256::aes256CbcDecrypt(const uint8_t* key32, const uint8_t* iv16, const uint8_t* in, size_t len, uint8_t* out) {
+    if (!key32 || !in || !out || len % 16 != 0) return false;
+
+    mbedtls_aes_context ctx;
+    mbedtls_aes_init(&ctx);
+    int ret = mbedtls_aes_setkey_dec(&ctx, key32, 256);
+    if (ret != 0) {
+        mbedtls_aes_free(&ctx);
+        return false;
+    }
+
+    uint8_t ivCopy[16];
+    if (iv16) {
+        memcpy(ivCopy, iv16, 16);
+    } else {
+        memset(ivCopy, 0, 16);
+    }
+
+    ret = mbedtls_aes_crypt_cbc(&ctx, MBEDTLS_AES_DECRYPT, len, ivCopy, in, out);
+    mbedtls_aes_free(&ctx);
+    return (ret == 0);
+}
+
+bool CryptoP256::aes256CbcEncrypt(const uint8_t* key32, const uint8_t* iv16, const uint8_t* in, size_t len, uint8_t* out) {
+    if (!key32 || !in || !out || len % 16 != 0) return false;
+
+    mbedtls_aes_context ctx;
+    mbedtls_aes_init(&ctx);
+    int ret = mbedtls_aes_setkey_enc(&ctx, key32, 256);
+    if (ret != 0) {
+        mbedtls_aes_free(&ctx);
+        return false;
+    }
+
+    uint8_t ivCopy[16];
+    if (iv16) {
+        memcpy(ivCopy, iv16, 16);
+    } else {
+        memset(ivCopy, 0, 16);
+    }
+
+    ret = mbedtls_aes_crypt_cbc(&ctx, MBEDTLS_AES_ENCRYPT, len, ivCopy, in, out);
+    mbedtls_aes_free(&ctx);
+    return (ret == 0);
 }
 
 uint32_t CryptoP256::getSignatureCounter() {
