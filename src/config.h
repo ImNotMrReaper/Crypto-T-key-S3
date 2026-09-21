@@ -41,9 +41,11 @@
 #define BTN_PANIC_HOLD_MS    6000     // Hold > 6000ms = Emergency Duress Wipe
 
 // ─── Security & PIN Settings ─────────────────────────────────────────────────
-#define PIN_LENGTH             4
-#define DEFAULT_MASTER_PIN     "1234"   // Default master PIN for vault setup
-#define EMERGENCY_DURESS_PIN   "9999"   // Triggers immediate flash scrub + decoy crash
+#define PIN_MIN_LENGTH         4
+#define PIN_MAX_LENGTH         8
+#define PIN_LENGTH             PIN_MAX_LENGTH  // Max buffer size
+#define DEFAULT_MASTER_PIN     "1234"          // Default master PIN for vault setup
+#define EMERGENCY_DURESS_PIN   "9999"          // Triggers immediate flash scrub + decoy crash
 
 // ─── Cyberpunk / Antigravity UI Palette (RGB565) ─────────────────────────────
 #define COLOR_BG               0x0000   // True OLED Pitch Black
@@ -58,12 +60,14 @@
 enum DeviceState {
     STATE_BOOT_SPLASH,         // Boot splash & cryptographic self-test
     STATE_SETUP_WALKTHROUGH,   // First-Time Setup Wizard (OOBE)
-    STATE_IDLE_READY,          // Pure Security Key Ready (1-Tap WebAuthn active)
+    STATE_IDLE_READY,          // Screen 1: Base Home Screen (Clock, Wi-Fi, System stats)
+    STATE_PASSKEY_HUB,         // Screen 2: Dedicated Passkey Authentication Hub (WebAuthn / FIDO2)
+    STATE_PORTFOLIO_TRACKER,   // Screen 3: Crypto & Asset Hub (Public Prices/Balances)
     STATE_PIN_ENTRY,           // Master PIN gate (Vault / Offline Signer access)
     STATE_VAULT_DASHBOARD,     // Unlocked Crypto Vault (BIP-39 / Addresses)
-    STATE_PORTFOLIO_TRACKER,   // Multi-currency holdings & live price tracker
     STATE_SEED_ENTROPY_COLLECT,// Collecting human timing jitter for seed generation
     STATE_SEED_WORD_DISPLAY,   // Word-by-word BIP-39 mnemonic verification
+    STATE_SEED_WORDS_VIEW,     // On-device view of existing seed words (PIN-gated)
     STATE_FIDO_AUTH_PROMPT,    // WebAuthn / Passkey user presence prompt
     STATE_CRYPTO_SIGN_PROMPT,  // Clear-signing transaction verification (WYSIWYS)
     STATE_AIRGAP_SD_SIGN,      // MicroSD PSBT air-gap signer

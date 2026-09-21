@@ -38,6 +38,10 @@ enum SupportedCoinId {
     COIN_ID_SHIB,
     COIN_ID_UNI,
     COIN_ID_XMR,
+    COIN_ID_PEPE,
+    COIN_ID_BONK,
+    COIN_ID_FLOKI,
+    COIN_ID_WIF,
     COIN_REGISTRY_COUNT
 };
 

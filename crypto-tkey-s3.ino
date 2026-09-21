@@ -56,6 +56,8 @@ Preferences   vaultPrefs;
 // ─── Global State ────────────────────────────────────────────────────────────
 DeviceState   deviceState = STATE_IDLE_READY;
 char          masterPin[PIN_LENGTH + 1] = DEFAULT_MASTER_PIN;
+int           masterPinLen = 4;
+uint8_t       dispRotation = DISP_ROTATION;
 char          pinDigits[PIN_LENGTH + 1] = "0000";
 int           pinIndex = 0;
 int           currentDigitVal = 0;
@@ -68,6 +70,11 @@ char          generatedMnemonic[240] = {0};
 char          mnemonicWords[24][16];
 int           totalMnemonicWords = 12;
 int           currentWordIdx = 0;
+
+// On-Device Verified Seed Words Viewer State
+char          verifiedSeedWords[24][16];
+int           totalSeedWords = 12;
+int           currentSeedViewIdx = 0;
 
 // Air-Gap PSBT Signer State
 char          psbtFilePath[64] = "";
@@ -84,13 +91,16 @@ char reqAmount[32]     = "0.054 BTC ($3,450)";
 void launchSetupPortal();
 void handleSerialCommands();
 void processIdleReadyState(ButtonEvent ev);
+void processPasskeyHubState(ButtonEvent ev);
 void processPinEntryState(ButtonEvent ev);
 void processVaultDashboardState(ButtonEvent ev);
+void processSeedWordsViewState(ButtonEvent ev);
 void processPortfolioTrackerState(ButtonEvent ev);
 void processSeedEntropyState(ButtonEvent ev);
 void processSeedWordDisplayState(ButtonEvent ev);
 void processAirGapSdSignState(ButtonEvent ev);
 void scanAndRenderAirGapPsbt();
+void parseWalletSeedWords();
 void resetPinEntry();
 void loadSecurityConfig();
 bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistration);
@@ -128,20 +138,24 @@ void setup() {
     rgb.setMode(LED_MODE_BREATHE_CYAN);
     rgb.update();
 
-    // 3. Display Engine (lilygo-tdongle-ui-dev double-buffered)
+    // 3. Security Config (load screen rotation and master PIN)
+    loadSecurityConfig();
+
+    // 4. Display Engine (lilygo-tdongle-ui-dev double-buffered)
     tft = new TFT_eSPI();
     tft->init();
-    tft->setRotation(DISP_ROTATION);
+    tft->setRotation(dispRotation);
     ui.begin(tft);
+    ui.setRotation(dispRotation);
 
-    // 4. Boot Splash
+    // 5. Boot Splash
     ui.renderBootSplash();
     for (int i = 0; i < 25; i++) {
         rgb.update();
         delay(20);
     }
 
-    // 5. Security & Vault Engines
+    // 6. Security & Vault Engines
     wallet = new CryptoWallet();
     wallet->begin();
 
@@ -154,19 +168,17 @@ void setup() {
         if (deviceState == STATE_IDLE_READY) {
             ui.renderSuccessBanner("DEVICE LOCATED", "WINK VERIFIED");
             delay(800);
-            ui.renderReadyDashboard(millis() / 1000, true, wallet && wallet->isUnlocked());
+            const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
+            ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
         }
     });
 
-    // 6. Portfolio & Seed Engines
+    // 7. Portfolio & Seed Engines
     PortfolioManager::init();
     SeedGenerator::init();
     wifi = new WifiManager();
     wifi->begin();
     portal = new WebPortal();
-
-    // 7. Security Config
-    loadSecurityConfig();
 
     vaultPrefs.begin("vault_sec", true);
     bool isProvisioned = vaultPrefs.getBool("provisioned", false);
@@ -176,11 +188,12 @@ void setup() {
         launchSetupPortal();
     } else {
         deviceState = STATE_IDLE_READY;
-        ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
+        const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
+        ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
         rgb.setMode(LED_MODE_BREATHE_CYAN);
     }
 
-    Serial.println("[BOOT] ✅ Crypto TKey S3 Ready. Pure Security Key & Crypto Vault Active.");
+    Serial.println("[BOOT] ✅ Crypto TKey S3 Ready. 3-Screen Architecture Active.");
     Serial.println("========================================================\n");
 }
 
@@ -195,6 +208,11 @@ void loop() {
         portal->update();
         if (portal->isSetupDone()) {
             strncpy(masterPin, portal->getNewPin(), PIN_LENGTH);
+            masterPin[PIN_LENGTH] = '\0';
+            masterPinLen = strlen(masterPin);
+            if (masterPinLen < PIN_MIN_LENGTH) masterPinLen = PIN_MIN_LENGTH;
+            if (masterPinLen > PIN_MAX_LENGTH) masterPinLen = PIN_MAX_LENGTH;
+
             vaultPrefs.begin("vault_sec", false);
             vaultPrefs.putString("user_pin", masterPin);
             vaultPrefs.putString("duress_pin", portal->getNewDuressPin());
@@ -211,7 +229,8 @@ void loop() {
 
             deviceState = STATE_IDLE_READY;
             rgb.setMode(LED_MODE_BREATHE_CYAN);
-            ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
+            const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
+            ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
         }
     }
 
@@ -227,11 +246,15 @@ void loop() {
                 portal->stop();
                 deviceState = STATE_IDLE_READY;
                 rgb.setMode(LED_MODE_BREATHE_CYAN);
-                ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
+                const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
+                ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
             }
             break;
         case STATE_IDLE_READY:
             processIdleReadyState(ev);
+            break;
+        case STATE_PASSKEY_HUB:
+            processPasskeyHubState(ev);
             break;
         case STATE_PORTFOLIO_TRACKER:
             processPortfolioTrackerState(ev);
@@ -241,6 +264,9 @@ void loop() {
             break;
         case STATE_VAULT_DASHBOARD:
             processVaultDashboardState(ev);
+            break;
+        case STATE_SEED_WORDS_VIEW:
+            processSeedWordsViewState(ev);
             break;
         case STATE_SEED_ENTROPY_COLLECT:
             processSeedEntropyState(ev);
@@ -261,16 +287,51 @@ void loop() {
     delay(5);
 }
 
-// ─── State: Idle Security Key Ready (1-Tap Touch Active) ─────────────────────
+// ─── Screen 1: Base Home Screen (Clock, Wi-Fi, System Status) ───────────────
 void processIdleReadyState(ButtonEvent ev) {
-    if (millis() - lastStateUpdate > 2000 && !PowerManager::isDisplaySleeping()) {
-        ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
+    if (millis() - lastStateUpdate > 3000 && !PowerManager::isDisplaySleeping()) {
+        const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
+        ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
         lastStateUpdate = millis();
     }
 
     if (ev == BTN_SHORT_PRESS) {
-        // Single tap switches directly to Live Portfolio Tracker with dynamic coin lighting!
+        // Single tap switches to Screen 2: Dedicated Passkey Authentication Hub!
+        deviceState = STATE_PASSKEY_HUB;
+        rgb.setMode(LED_MODE_BREATHE_GREEN);
+        ui.renderPasskeyHub(false, nullptr, 1.0f);
+        Serial.println("[NAV] Switched to Screen 2: Passkey Authentication Hub");
+    } else if (ev == BTN_DOUBLE_CLICK) {
+        // Double click toggles 180° Screen Rotation!
+        dispRotation = (dispRotation == 1) ? 3 : 1;
+        tft->setRotation(dispRotation);
+        ui.setRotation(dispRotation);
+        vaultPrefs.begin("vault_sec", false);
+        vaultPrefs.putUChar("disp_rot", dispRotation);
+        vaultPrefs.end();
+        const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
+        ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
+        rgb.flashDoubleTap(0, 229, 255);
+        Serial.printf("[SCREEN] Flipped orientation to rotation %d\n", dispRotation);
+    } else if (ev == BTN_LONG_PRESS) {
+        // Long press dims / toggles sleep
+        PowerManager::toggleDisplaySleep();
+    } else if (ev == BTN_PANIC_HOLD) {
+        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
+    }
+}
+
+// ─── Screen 2: Passkey Authentication Hub (Dedicated WebAuthn / FIDO2) ──────
+void processPasskeyHubState(ButtonEvent ev) {
+    if (millis() - lastStateUpdate > 4000 && !PowerManager::isDisplaySleeping()) {
+        ui.renderPasskeyHub(false, nullptr, 1.0f);
+        lastStateUpdate = millis();
+    }
+
+    if (ev == BTN_SHORT_PRESS) {
+        // Single tap switches to Screen 3: Crypto & Asset Hub!
         deviceState = STATE_PORTFOLIO_TRACKER;
+        PowerManager::setKeepAwake(true); // Keep display awake continuously on live price screen!
         CoinAsset* coin = PortfolioManager::getCurrentCoin();
         if (coin) {
             RgbColor c = RgbStatus::getCoinRgb(coin->symbol);
@@ -278,19 +339,26 @@ void processIdleReadyState(ButtonEvent ev) {
             rgb.setCoinColor(c.r, c.g, c.b);
         }
         renderCurrentPortfolioCard();
+        Serial.println("[NAV] Switched to Screen 3: Crypto & Asset Hub (Keep-Awake ON)");
+    } else if (ev == BTN_DOUBLE_CLICK) {
+        // Double tap returns to Screen 1: Base Home Screen
+        deviceState = STATE_IDLE_READY;
+        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
+        ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
+        Serial.println("[NAV] Returned to Screen 1: Base Home Screen");
     } else if (ev == BTN_LONG_PRESS) {
-        // Long press opens Master PIN Gate
-        deviceState = STATE_PIN_ENTRY;
-        resetPinEntry();
-        rgb.setMode(LED_MODE_SOLID_AMBER);
-        ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
-        Serial.println("[VAULT] Entering Master PIN gate...");
+        // Arm / Tactile indicator touch test
+        rgb.flashRainbow(800);
+        ui.renderSuccessBanner("FIDO2 ARMED", "READY FOR LOGIN");
+        delay(800);
+        ui.renderPasskeyHub(false, nullptr, 1.0f);
     } else if (ev == BTN_PANIC_HOLD) {
         DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
-// ─── State: Portfolio Tracker (Carousel of Active Coins) ─────────────────────
+// ─── Screen 3: Crypto & Asset Hub (Public Prices & Balances) ────────────────
 void renderCurrentPortfolioCard() {
     CoinAsset* coin = PortfolioManager::getCurrentCoin();
     if (coin) {
@@ -312,69 +380,71 @@ void processPortfolioTrackerState(ButtonEvent ev) {
         }
         renderCurrentPortfolioCard();
     } else if (ev == BTN_DOUBLE_CLICK) {
-        // Previous Coin
-        PortfolioManager::prevCoin();
-        CoinAsset* coin = PortfolioManager::getCurrentCoin();
-        if (coin) {
-            RgbColor c = RgbStatus::getCoinRgb(coin->symbol);
-            rgb.flashTap(c.r, c.g, c.b, 60);
-            rgb.setCoinColor(c.r, c.g, c.b);
-        }
-        renderCurrentPortfolioCard();
-    } else if (ev == BTN_LONG_PRESS || ev == BTN_VERY_LONG_PRESS) {
-        // Return to Idle Ready
+        // Double tap returns to Screen 1: Base Home Screen and releases keep-awake
+        PowerManager::setKeepAwake(false);
         deviceState = STATE_IDLE_READY;
         rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
+        const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
+        ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
+        Serial.println("[NAV] Exited Crypto Hub -> Base Home Screen");
+    } else if (ev == BTN_LONG_PRESS) {
+        // Long press opens Master PIN Gate to unlock Private Vault!
+        PowerManager::setKeepAwake(false);
+        deviceState = STATE_PIN_ENTRY;
+        resetPinEntry();
+        rgb.setMode(LED_MODE_SOLID_AMBER);
+        ui.renderPinScreen(pinDigits, masterPinLen, pinIndex, currentDigitVal, 0);
+        Serial.println("[VAULT] Entering Master PIN gate (4-8 digits)...");
     } else if (ev == BTN_PANIC_HOLD) {
         DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
-// ─── State: PIN Entry (Master PIN Gate) ──────────────────────────────────────
+// ─── State: Master PIN Gate (Dynamic 4-to-8 Digits) ─────────────────────────
 void processPinEntryState(ButtonEvent ev) {
     if (btn.isPressedNow()) {
         uint8_t stage = btn.getHoldStage() * 33;
         if (stage != lastHoldStage) {
             lastHoldStage = stage;
-            ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, stage);
+            ui.renderPinScreen(pinDigits, masterPinLen, pinIndex, currentDigitVal, stage);
             rgb.setHoldProgress((float)stage / 100.0f);
         }
     } else if (lastHoldStage > 0) {
         lastHoldStage = 0;
-        ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
+        ui.renderPinScreen(pinDigits, masterPinLen, pinIndex, currentDigitVal, 0);
         rgb.setMode(LED_MODE_SOLID_AMBER);
     }
 
     if (ev == BTN_SHORT_PRESS) {
         currentDigitVal = (currentDigitVal + 1) % 10;
         pinDigits[pinIndex] = '0' + currentDigitVal;
-        ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
-        rgb.flashTap(0, 229, 255, 60); // Crisp cyan tactile feedback
+        ui.renderPinScreen(pinDigits, masterPinLen, pinIndex, currentDigitVal, 0);
+        rgb.flashTap(0, 229, 255, 60);
         Serial.printf("[PIN] Slot %d = %d\n", pinIndex + 1, currentDigitVal);
     } else if (ev == BTN_DOUBLE_CLICK) {
-        rgb.flashDoubleTap(255, 140, 0); // Amber backspace feedback
+        rgb.flashDoubleTap(255, 140, 0);
         if (pinIndex > 0) {
             pinDigits[pinIndex] = '0';
             pinIndex--;
             currentDigitVal = pinDigits[pinIndex] - '0';
-            ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
+            ui.renderPinScreen(pinDigits, masterPinLen, pinIndex, currentDigitVal, 0);
         } else {
-            deviceState = STATE_IDLE_READY;
-            rgb.setMode(LED_MODE_BREATHE_CYAN);
-            ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
+            // Cancel back to Crypto Hub
+            deviceState = STATE_PORTFOLIO_TRACKER;
+            PowerManager::setKeepAwake(true);
+            renderCurrentPortfolioCard();
         }
     } else if (ev == BTN_LONG_PRESS) {
         pinDigits[pinIndex] = '0' + currentDigitVal;
         pinIndex++;
 
-        if (pinIndex < PIN_LENGTH) {
+        if (pinIndex < masterPinLen) {
             currentDigitVal = 0;
             pinDigits[pinIndex] = '0';
-            ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
-            rgb.flashTap(0, 255, 100, 100); // Emerald advance slot feedback
+            ui.renderPinScreen(pinDigits, masterPinLen, pinIndex, currentDigitVal, 0);
+            rgb.flashTap(0, 255, 100, 100);
         } else {
-            pinDigits[PIN_LENGTH] = '\0';
+            pinDigits[masterPinLen] = '\0';
             Serial.printf("[PIN] Validating PIN: %s\n", pinDigits);
 
             if (strcmp(pinDigits, EMERGENCY_DURESS_PIN) == 0) {
@@ -382,13 +452,13 @@ void processPinEntryState(ButtonEvent ev) {
             } else if (strcmp(pinDigits, masterPin) == 0) {
                 Serial.println("[VAULT] Master PIN Accepted! Unlocked.");
                 wallet->unlock(pinDigits);
-                rgb.flashRainbow(800); // Celebratory rainbow shimmer
+                rgb.flashRainbow(800);
                 ui.renderSuccessBanner("VAULT UNLOCKED", "CRYPTO SIGNER READY");
                 delay(1200);
 
                 deviceState = STATE_VAULT_DASHBOARD;
                 currentViewCoin = COIN_BTC;
-                rgb.setCoinColor(255, 140, 0); // Bitcoin gold for initial vault view
+                rgb.setCoinColor(255, 140, 0);
                 const WalletAccount* acc = wallet->getAccount(COIN_BTC);
                 ui.renderWalletScreen("BITCOIN", "BTC (SegWit)", acc ? acc->address : "bc1q...", acc ? acc->derivationPath : "m/84'/0'/0'/0/0");
             } else {
@@ -398,19 +468,19 @@ void processPinEntryState(ButtonEvent ev) {
                 delay(1200);
                 resetPinEntry();
                 rgb.setMode(LED_MODE_SOLID_AMBER);
-                ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
+                ui.renderPinScreen(pinDigits, masterPinLen, pinIndex, currentDigitVal, 0);
             }
         }
     } else if (ev == BTN_VERY_LONG_PRESS) {
         resetPinEntry();
         rgb.flashDoubleTap(255, 0, 0);
-        ui.renderPinScreen(pinDigits, pinIndex, currentDigitVal, 0);
+        ui.renderPinScreen(pinDigits, masterPinLen, pinIndex, currentDigitVal, 0);
     } else if (ev == BTN_PANIC_HOLD) {
         DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
-// ─── State: Vault Dashboard & Multi-Currency Address Explorer ───────────────
+// ─── State: Vault Dashboard (Private Derived Addresses Explorer) ────────────
 void processVaultDashboardState(ButtonEvent ev) {
     if (ev == BTN_SHORT_PRESS) {
         currentViewCoin = (CryptoCoin)((currentViewCoin + 1) % 4);
@@ -418,23 +488,88 @@ void processVaultDashboardState(ButtonEvent ev) {
         const char* name = "BITCOIN";
         const char* sym  = "BTC (SegWit)";
         uint8_t cr = 255, cg = 140, cb = 0;
-        if (currentViewCoin == COIN_ETH)  { name = "ETHEREUM"; sym = "ETH (ERC-20)"; cr = 138; cg = 75; cb = 255; }
-        if (currentViewCoin == COIN_SOL)  { name = "SOLANA";   sym = "SOL (Ed25519)"; cr = 20; cg = 241; cb = 149; }
-        if (currentViewCoin == COIN_DOGE) { name = "DOGECOIN"; sym = "DOGE (Legacy)"; cr = 255; cg = 195; cb = 15; }
+        if (currentViewCoin == COIN_ETH)  { name = "ETHEREUM / PEPE"; sym = "ETH (ERC-20)"; cr = 138; cg = 75; cb = 255; }
+        if (currentViewCoin == COIN_SOL)  { name = "SOLANA";          sym = "SOL (Ed25519)"; cr = 20; cg = 241; cb = 149; }
+        if (currentViewCoin == COIN_DOGE) { name = "DOGECOIN";        sym = "DOGE (Legacy)"; cr = 255; cg = 195; cb = 15; }
 
         rgb.flashTap(cr, cg, cb, 60);
         rgb.setCoinColor(cr, cg, cb);
         ui.renderWalletScreen(name, sym, acc ? acc->address : "", acc ? acc->derivationPath : "");
     } else if (ev == BTN_DOUBLE_CLICK) {
-        // Double click launches the Air-Gap MicroSD PSBT Signer!
+        // Double click launches the On-Device Verified Seed Words Viewer!
+        deviceState = STATE_SEED_WORDS_VIEW;
+        currentSeedViewIdx = 0;
+        parseWalletSeedWords();
+        ui.renderSeedWordsView(currentSeedViewIdx + 1, totalSeedWords, verifiedSeedWords[currentSeedViewIdx]);
+        rgb.setMode(LED_MODE_SOLID_AMBER);
+        Serial.println("[VAULT] Opened On-Device Recovery Seed Viewer (PIN Protected)");
+    } else if (ev == BTN_LONG_PRESS) {
+        // Long press locks vault and returns to Screen 3: Crypto Hub
+        wallet->lock();
+        deviceState = STATE_PORTFOLIO_TRACKER;
+        PowerManager::setKeepAwake(true);
+        CoinAsset* coin = PortfolioManager::getCurrentCoin();
+        if (coin) {
+            RgbColor c = RgbStatus::getCoinRgb(coin->symbol);
+            rgb.setCoinColor(c.r, c.g, c.b);
+        }
+        renderCurrentPortfolioCard();
+        Serial.println("[VAULT] Vault Locked. Returned to Crypto Hub.");
+    } else if (ev == BTN_VERY_LONG_PRESS) {
+        // Very long press launches the Air-Gap MicroSD PSBT Signer
         deviceState = STATE_AIRGAP_SD_SIGN;
         scanAndRenderAirGapPsbt();
+    } else if (ev == BTN_PANIC_HOLD) {
+        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
+    }
+}
+
+// ─── State: Seed Words Viewer (Word-by-Word BIP-39 Viewer) ──────────────────
+void parseWalletSeedWords() {
+    const char* phrase = wallet ? wallet->getMnemonicPhrase() : nullptr;
+    if (!phrase || strlen(phrase) == 0) {
+        totalSeedWords = 12;
+        for (int i = 0; i < 12; i++) {
+            snprintf(verifiedSeedWords[i], sizeof(verifiedSeedWords[i]), "word%d", i + 1);
+        }
+        return;
+    }
+    char temp[240];
+    strncpy(temp, phrase, sizeof(temp) - 1);
+    temp[sizeof(temp) - 1] = '\0';
+    char* token = strtok(temp, " ");
+    int count = 0;
+    while (token && count < 24) {
+        strncpy(verifiedSeedWords[count], token, sizeof(verifiedSeedWords[count]) - 1);
+        verifiedSeedWords[count][sizeof(verifiedSeedWords[count]) - 1] = '\0';
+        token = strtok(nullptr, " ");
+        count++;
+    }
+    totalSeedWords = (count > 0) ? count : 12;
+}
+
+void processSeedWordsViewState(ButtonEvent ev) {
+    if (ev == BTN_SHORT_PRESS) {
+        // Next Word
+        currentSeedViewIdx = (currentSeedViewIdx + 1) % totalSeedWords;
+        rgb.flashTap(0, 229, 255, 50);
+        ui.renderSeedWordsView(currentSeedViewIdx + 1, totalSeedWords, verifiedSeedWords[currentSeedViewIdx]);
+    } else if (ev == BTN_DOUBLE_CLICK) {
+        // Previous Word
+        currentSeedViewIdx = (currentSeedViewIdx - 1 + totalSeedWords) % totalSeedWords;
+        rgb.flashDoubleTap(255, 140, 0);
+        ui.renderSeedWordsView(currentSeedViewIdx + 1, totalSeedWords, verifiedSeedWords[currentSeedViewIdx]);
     } else if (ev == BTN_LONG_PRESS || ev == BTN_VERY_LONG_PRESS) {
-        wallet->lock();
-        deviceState = STATE_IDLE_READY;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderReadyDashboard(millis() / 1000, true, false);
-        Serial.println("[VAULT] Vault Locked.");
+        // Exit back to Vault Dashboard
+        deviceState = STATE_VAULT_DASHBOARD;
+        const WalletAccount* acc = wallet->getAccount(currentViewCoin);
+        const char* name = "BITCOIN";
+        const char* sym  = "BTC (SegWit)";
+        if (currentViewCoin == COIN_ETH)  { name = "ETHEREUM / PEPE"; sym = "ETH (ERC-20)"; }
+        if (currentViewCoin == COIN_SOL)  { name = "SOLANA";          sym = "SOL (Ed25519)"; }
+        if (currentViewCoin == COIN_DOGE) { name = "DOGECOIN";        sym = "DOGE (Legacy)"; }
+        ui.renderWalletScreen(name, sym, acc ? acc->address : "", acc ? acc->derivationPath : "");
+        Serial.println("[VAULT] Exited Seed Words View -> Vault Dashboard");
     } else if (ev == BTN_PANIC_HOLD) {
         DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
@@ -600,9 +735,9 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
     }
 
     DeviceState prev = deviceState;
-    deviceState = STATE_FIDO_AUTH_PROMPT;
+    deviceState = STATE_PASSKEY_HUB;
     rgb.setMode(LED_MODE_PULSE_GREEN);
-    ui.renderFidoPrompt(reqDomain, 1.0f);
+    ui.renderPasskeyHub(true, reqDomain, 1.0f);
     Serial.printf("[FIDO2] Prompting User Presence for '%s' (Registration: %s, CID: 0x%08X)\n",
                   reqDomain, isRegistration ? "YES" : "NO", cid);
 
@@ -624,7 +759,7 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
         }
 
         float remaining = 1.0f - ((float)(millis() - start) / 30000.0f);
-        ui.renderFidoPrompt(reqDomain, remaining);
+        ui.renderPasskeyHub(true, reqDomain, remaining);
 
         if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS) {
             confirmed = true;
@@ -649,7 +784,13 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
     deviceState = prev;
     if (deviceState == STATE_IDLE_READY) {
         rgb.setMode(LED_MODE_BREATHE_CYAN);
-        ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
+        const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
+        ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
+    } else if (deviceState == STATE_PASSKEY_HUB) {
+        rgb.setMode(LED_MODE_BREATHE_GREEN);
+        ui.renderPasskeyHub(false, nullptr, 1.0f);
+    } else if (deviceState == STATE_PORTFOLIO_TRACKER) {
+        renderCurrentPortfolioCard();
     }
 
     return confirmed;
@@ -659,12 +800,16 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
 void resetPinEntry() {
     pinIndex = 0;
     currentDigitVal = 0;
-    for (int i = 0; i < PIN_LENGTH; i++) pinDigits[i] = '0';
-    pinDigits[PIN_LENGTH] = '\0';
+    masterPinLen = strlen(masterPin);
+    if (masterPinLen < PIN_MIN_LENGTH) masterPinLen = PIN_MIN_LENGTH;
+    if (masterPinLen > PIN_MAX_LENGTH) masterPinLen = PIN_MAX_LENGTH;
+    for (int i = 0; i < masterPinLen; i++) pinDigits[i] = '0';
+    pinDigits[masterPinLen] = '\0';
 }
 
 void loadSecurityConfig() {
     vaultPrefs.begin("vault_sec", false);
+    dispRotation = vaultPrefs.getUChar("disp_rot", DISP_ROTATION);
     if (!vaultPrefs.isKey("provisioned")) {
         vaultPrefs.putBool("provisioned", false);
         vaultPrefs.putString("user_pin", DEFAULT_MASTER_PIN);
@@ -673,6 +818,10 @@ void loadSecurityConfig() {
         String savedPin = vaultPrefs.getString("user_pin", DEFAULT_MASTER_PIN);
         strncpy(masterPin, savedPin.c_str(), PIN_LENGTH);
     }
+    masterPin[PIN_LENGTH] = '\0';
+    masterPinLen = strlen(masterPin);
+    if (masterPinLen < PIN_MIN_LENGTH) masterPinLen = PIN_MIN_LENGTH;
+    if (masterPinLen > PIN_MAX_LENGTH) masterPinLen = PIN_MAX_LENGTH;
     vaultPrefs.end();
 }
 
@@ -693,6 +842,7 @@ void handleSerialCommands() {
     if (cmd.equalsIgnoreCase("help")) {
         Serial.println("\n--- Crypto TKey S3 CLI ---");
         Serial.println("  status                   - Print security key status & uptime");
+        Serial.println("  flip                     - Flip display 180 degrees (landscape)");
         Serial.println("  coins                    - List all 24 supported coins & holdings");
         Serial.println("  enable <SYM>             - Enable coin in active portfolio tracker");
         Serial.println("  disable <SYM>            - Disable coin from portfolio tracker");
@@ -708,9 +858,19 @@ void handleSerialCommands() {
         Serial.println("  psbt [scan|parse|sign]   - Air-Gapped MicroSD BIP-174 Bitcoin signer");
         Serial.println("  panic                    - Trigger emergency flash nuke");
     } else if (cmd.equalsIgnoreCase("status")) {
-        Serial.printf("Uptime: %lus | CPU: %dMHz | Vault: %s | Master PIN: %s | Active Coins: %d\n",
+        Serial.printf("Uptime: %lus | CPU: %dMHz | Vault: %s | Master PIN Len: %d | Active Coins: %d | Rotation: %d\n",
             millis() / 1000, getCpuFrequencyMhz(), wallet->isUnlocked() ? "UNLOCKED" : "LOCKED",
-            masterPin, PortfolioManager::getActiveCount());
+            masterPinLen, PortfolioManager::getActiveCount(), dispRotation);
+    } else if (cmd.equalsIgnoreCase("flip")) {
+        dispRotation = (dispRotation == 1) ? 3 : 1;
+        tft->setRotation(dispRotation);
+        ui.setRotation(dispRotation);
+        vaultPrefs.begin("vault_sec", false);
+        vaultPrefs.putUChar("disp_rot", dispRotation);
+        vaultPrefs.end();
+        const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
+        ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
+        Serial.printf("[SCREEN] Flipped to rotation %d\n", dispRotation);
     } else if (cmd.startsWith("unlock ")) {
         String pin = cmd.substring(7);
         pin.trim();
@@ -826,14 +986,16 @@ void handleSerialCommands() {
     } else if (cmd.startsWith("setpin ")) {
         String newPin = cmd.substring(7);
         newPin.trim();
-        if (newPin.length() == PIN_LENGTH) {
+        if (newPin.length() >= PIN_MIN_LENGTH && newPin.length() <= PIN_MAX_LENGTH) {
             strncpy(masterPin, newPin.c_str(), PIN_LENGTH);
+            masterPin[PIN_LENGTH] = '\0';
+            masterPinLen = strlen(masterPin);
             vaultPrefs.begin("vault_sec", false);
             vaultPrefs.putString("user_pin", masterPin);
             vaultPrefs.end();
-            Serial.printf("Master PIN successfully changed to: %s\n", masterPin);
+            Serial.printf("Master PIN successfully changed to: %s (%d digits)\n", masterPin, masterPinLen);
         } else {
-            Serial.println("Error: PIN must be exactly 4 digits.");
+            Serial.printf("Error: PIN must be between %d and %d digits.\n", PIN_MIN_LENGTH, PIN_MAX_LENGTH);
         }
     } else if (cmd.equalsIgnoreCase("panic")) {
         DuressWipe::execute(*tft, rgb, "SERIAL_PANIC");

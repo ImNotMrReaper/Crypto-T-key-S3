@@ -28,6 +28,7 @@ public:
     bool isConnected();
     String getIp();
     String getSsid();
+    const char* getConnectedSsid();
     int8_t getRssi();
 
     // Multi-Network Management

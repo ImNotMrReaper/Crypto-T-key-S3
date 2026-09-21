@@ -48,7 +48,11 @@ COINGECKO_MAP = {
     "BNB": "binancecoin",
     "SHIB": "shiba-inu",
     "UNI": "uniswap",
-    "XMR": "monero"
+    "XMR": "monero",
+    "PEPE": "pepe",
+    "BONK": "bonk",
+    "FLOKI": "floki",
+    "WIF": "dogwifcoin"
 }
 
 def find_device_port():
@@ -82,6 +86,34 @@ def fetch_coingecko_prices():
         print(f"[TRACKER] CoinGecko API error: {e}", file=sys.stderr)
         return {}
 
+def fetch_kraken_prices():
+    """Fetches sub-second real-time rates from Kraken public REST API (BTC, ETH, SOL, PEPE, DOGE)."""
+    url = "https://api.kraken.com/0/public/Ticker?pair=XXBTZUSD,XETHZUSD,SOLUSD,PEPEUSD,XDGUSD"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (TKey-FastTicker/1.0)"})
+    rates = {}
+    try:
+        with urllib.request.urlopen(req, timeout=5) as res:
+            data = json.loads(res.read().decode())
+            results = data.get("result", {})
+            pair_map = {
+                "XXBTZUSD": "BTC",
+                "XETHZUSD": "ETH",
+                "SOLUSD": "SOL",
+                "PEPEUSD": "PEPE",
+                "XDGUSD": "DOGE"
+            }
+            for k_pair, sym in pair_map.items():
+                if k_pair in results:
+                    p_info = results[k_pair]
+                    curr_p = float(p_info["c"][0])
+                    open_p = float(p_info["o"])
+                    chg_pct = ((curr_p - open_p) / open_p * 100.0) if open_p > 0 else 0.0
+                    rates[sym] = {"price": curr_p, "change24h": chg_pct}
+            return rates
+    except Exception as e:
+        print(f"[TRACKER] Kraken fast ticker error: {e}", file=sys.stderr)
+        return {}
+
 def fetch_btc_balance(address):
     """Fetches confirmed on-chain balance for a Bitcoin address via Mempool.space."""
     if not address or len(address) < 20 or not address.startswith("bc1"):
@@ -112,6 +144,31 @@ def fetch_eth_balance(address):
             return wei / 1e18
     except Exception as e:
         print(f"[TRACKER] Ethereum RPC error ({address}): {e}", file=sys.stderr)
+        return 0.0
+
+def fetch_pepe_balance(address):
+    """Fetches on-chain PEPE ERC-20 token balance via Ethereum public RPC."""
+    if not address or not address.startswith("0x") or len(address) != 42:
+        return 0.0
+    pepe_contract = "0x6982508145454Ce325dDbE47a25d4ec3d2311933"
+    clean_addr = address[2:].lower().zfill(64)
+    data = "0x70a08231" + clean_addr
+    url = "https://ethereum-rpc.publicnode.com"
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "eth_call",
+        "params": [{"to": pepe_contract, "data": data}, "latest"],
+        "id": 2
+    }).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as res:
+            resp = json.loads(res.read().decode())
+            hex_val = resp.get("result", "0x0")
+            raw_units = int(hex_val, 16)
+            return raw_units / 1e18
+    except Exception as e:
+        print(f"[TRACKER] PEPE balance error ({address}): {e}", file=sys.stderr)
         return 0.0
 
 def fetch_sol_balance(address):
@@ -152,20 +209,34 @@ def sync_cycle(port):
     ser = serial.Serial(port, 115200, timeout=1.0)
     time.sleep(0.2)
 
-    # 1. Fetch live market prices
-    print("[TRACKER] 🌐 Fetching live CoinGecko market rates...")
+    # 1. Fetch sub-second Kraken rates first (high-frequency priority)
+    print("[TRACKER] ⚡ Fetching sub-second rates from Kraken (BTC, ETH, SOL, PEPE, DOGE)...")
+    kraken_rates = fetch_kraken_prices()
+    synced_coins = set()
+    if kraken_rates:
+        for sym, data in kraken_rates.items():
+            cmd = f"setprice {sym} {data['price']:.8f} {data['change24h']:.2f}\n"
+            ser.write(cmd.encode())
+            synced_coins.add(sym)
+            time.sleep(0.04)
+        print(f"[TRACKER] ⚡ Kraken sub-second rates pushed for: {list(kraken_rates.keys())}")
+
+    # 2. Fetch CoinGecko rates for remaining coins
+    print("[TRACKER] 🌐 Fetching CoinGecko rates for asset registry...")
     prices = fetch_coingecko_prices()
     if prices:
         for sym, cg_id in COINGECKO_MAP.items():
+            if sym in synced_coins:
+                continue
             if cg_id in prices:
                 p_usd = prices[cg_id].get("usd", 0.0)
                 chg = prices[cg_id].get("usd_24h_change", 0.0)
-                cmd = f"setprice {sym} {p_usd:.4f} {chg:.2f}\n"
+                cmd = f"setprice {sym} {p_usd:.8f} {chg:.2f}\n"
                 ser.write(cmd.encode())
                 time.sleep(0.04)
-        print(f"[TRACKER] ✅ Updated prices for {len(COINGECKO_MAP)} assets.")
+        print(f"[TRACKER] ✅ Updated full asset registry.")
 
-    # 2. Query derived deposit addresses & check on-chain balances
+    # 3. Query derived deposit addresses & check on-chain balances
     addrs = query_device_addresses(ser)
     if addrs:
         print(f"[TRACKER] 🔍 Derived addresses found on key: {list(addrs.keys())}")
@@ -178,6 +249,12 @@ def sync_cycle(port):
             eth_bal = fetch_eth_balance(addrs["ETH"])
             ser.write(f"setbal ETH {eth_bal:.6f}\n".encode())
             print(f"[TRACKER] ⟠ Ethereum On-Chain Balance: {eth_bal:.6f} ETH ({addrs['ETH']})")
+            time.sleep(0.05)
+
+            # Auto-track PEPE ERC-20 token on same EVM account!
+            pepe_bal = fetch_pepe_balance(addrs["ETH"])
+            ser.write(f"setbal PEPE {pepe_bal:.2f}\n".encode())
+            print(f"[TRACKER] 🐸 PEPE On-Chain Balance: {pepe_bal:,.2f} PEPE")
             time.sleep(0.05)
 
     ser.close()

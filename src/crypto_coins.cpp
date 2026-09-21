@@ -29,7 +29,11 @@ CoinAsset CryptoCoinRegistry::_coins[COIN_REGISTRY_COUNT] = {
     { COIN_ID_BNB,  "BNB",   "BNB Chain",     "m/44'/714'/0'/0/0",  CURVE_SECP256K1, false, 0.0f,   575.00f, +1.8f, "" },
     { COIN_ID_SHIB, "SHIB",  "Shiba Inu",     "m/44'/60'/0'/0/0",   CURVE_SECP256K1, false, 0.0f, 0.000015f, +3.1f, "" },
     { COIN_ID_UNI,  "UNI",   "Uniswap",       "m/44'/60'/0'/0/0",   CURVE_SECP256K1, false, 0.0f,     7.20f, +1.4f, "" },
-    { COIN_ID_XMR,  "XMR",   "Monero",        "m/44'/128'/0'/0/0",  CURVE_ED25519,   false, 0.0f,   152.00f, +1.0f, "" }
+    { COIN_ID_XMR,  "XMR",   "Monero",        "m/44'/128'/0'/0/0",  CURVE_ED25519,   false, 0.0f,   152.00f, +1.0f, "" },
+    { COIN_ID_PEPE, "PEPE",  "Pepe",          "m/44'/60'/0'/0/0",   CURVE_SECP256K1, true,  0.0f, 0.0000105f, +24.5f, "" },
+    { COIN_ID_BONK, "BONK",  "Bonk",          "m/44'/501'/0'/0'",   CURVE_ED25519,   false, 0.0f, 0.0000185f, +6.2f,  "" },
+    { COIN_ID_FLOKI,"FLOKI", "Floki",         "m/44'/60'/0'/0/0",   CURVE_SECP256K1, false, 0.0f, 0.000142f,  +8.1f,  "" },
+    { COIN_ID_WIF,  "WIF",   "dogwifhat",     "m/44'/501'/0'/0'",   CURVE_ED25519,   false, 0.0f,     2.15f,  +5.4f,  "" }
 };
 
 void CryptoCoinRegistry::init() {

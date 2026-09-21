@@ -180,6 +180,20 @@ void RgbStatus::update() {
             break;
         }
 
+        case LED_MODE_BREATHE_GREEN: {
+            // Smooth emerald green breathing for Passkey Hub Ready state
+            if (_direction) {
+                _step += 4;
+                if (_step >= 220) _direction = false;
+            } else {
+                if (_step > 20) _step -= 4;
+                else _direction = true;
+            }
+            uint8_t val = (uint8_t)_step;
+            setPixel(0, val, (uint8_t)(val * 0.25f), 4);
+            break;
+        }
+
         case LED_MODE_PULSE_GREEN: {
             // Rhythmic heartbeat pulse awaiting biometric / FIDO2 User Presence confirmation
             _step = (_step + 8) % 360;

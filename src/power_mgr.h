@@ -18,9 +18,13 @@ public:
     static void init();
     static void update(bool userActive);
     static void wakeDisplay();
+    static void toggleDisplaySleep();
     static bool isDisplaySleeping();
+    static void setKeepAwake(bool keepAwake);
+    static bool getKeepAwake();
 
 private:
     static uint32_t _lastActivityMs;
     static bool     _displaySleeping;
+    static bool     _keepAwake;
 };

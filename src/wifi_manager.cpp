@@ -173,6 +173,17 @@ String WifiManager::getSsid() {
     return "Disconnected";
 }
 
+const char* WifiManager::getConnectedSsid() {
+    static char ssidBuf[33];
+    if (isConnected()) {
+        String s = WiFi.SSID();
+        strncpy(ssidBuf, s.c_str(), sizeof(ssidBuf) - 1);
+        ssidBuf[sizeof(ssidBuf) - 1] = '\0';
+        return ssidBuf;
+    }
+    return "AIRGAP";
+}
+
 int8_t WifiManager::getRssi() {
     if (isConnected()) return WiFi.RSSI();
     return 0;

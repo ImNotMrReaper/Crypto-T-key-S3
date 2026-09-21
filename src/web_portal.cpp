@@ -2,7 +2,7 @@
  * web_portal.cpp — SoftAP Captive Setup Portal Implementation
  * Standard: Follows embedded-setup-portal-dev skill.
  * Zero mnemonic leakage, asynchronous Wi-Fi scanning, captive OS redirection,
- * and complete thermal radio shutdown.
+ * multi-network permanent storage, and complete thermal radio shutdown.
  */
 
 #include "web_portal.h"
@@ -190,15 +190,15 @@ void WebPortal::handleRoot() {
     }
 
     String html;
-    html.reserve(12000);
+    html.reserve(16000);
 
     html = "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'>";
     html += "<meta name='viewport' content='width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no'>";
     html += "<title>Crypto TKey S3 Setup</title><style>";
-    html += ":root{--bg:#0A0D14;--surface:#121622;--border:#1E2538;--cyan:#00E5FF;--green:#00FF66;--amber:#FFB300;--red:#FF1744;--text:#F0F4FC;--muted:#7E8B9F;}";
+    html += ":root{--bg:#0A0D14;--surface:#121622;--border:#1E2538;--cyan:#00E5FF;--green:#00FF66;--amber:#FFB300;--red:#FF1744;--pepe:#00E676;--text:#F0F4FC;--muted:#7E8B9F;}";
     html += "*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,-apple-system,sans-serif;}";
     html += "body{background:var(--bg);color:var(--text);padding:16px;display:flex;justify-content:center;}";
-    html += ".container{width:100%;max-width:500px;}";
+    html += ".container{width:100%;max-width:520px;}";
     html += ".header{text-align:center;margin-bottom:20px;}";
     html += ".header h1{font-size:1.3rem;letter-spacing:1px;color:var(--cyan);margin-bottom:4px;}";
     html += ".header p{font-size:0.8rem;color:var(--muted);}";
@@ -210,11 +210,15 @@ void WebPortal::handleRoot() {
     html += "input:focus,select:focus{border-color:var(--cyan);}";
     html += ".field-desc{font-size:0.72rem;color:var(--muted);margin-top:4px;line-height:1.3;}";
     html += ".warning-box{background:rgba(255,179,0,0.08);border-left:3px solid var(--amber);padding:10px;border-radius:4px;font-size:0.75rem;color:#FFE082;margin-top:6px;line-height:1.4;}";
-    html += ".coins-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;max-height:260px;overflow-y:auto;padding-right:4px;}";
+    html += ".filter-bar{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;}";
+    html += ".btn-filter{padding:4px 10px;font-size:0.72rem;background:#07090F;border:1px solid var(--border);color:var(--muted);border-radius:6px;cursor:pointer;}";
+    html += ".btn-filter:hover{border-color:var(--cyan);color:var(--cyan);}";
+    html += ".coins-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;max-height:280px;overflow-y:auto;padding-right:4px;}";
     html += ".coin-pill{background:#07090F;border:1px solid var(--border);border-radius:8px;padding:8px 10px;display:flex;align-items:center;justify-content:space-between;}";
     html += ".coin-lbl{display:flex;align-items:center;gap:6px;font-size:0.82rem;font-weight:600;color:#fff;cursor:pointer;}";
     html += ".coin-lbl input{accent-color:var(--cyan);}";
     html += ".auto-badge{font-size:0.65rem;background:rgba(0,229,255,0.12);color:var(--cyan);padding:2px 6px;border-radius:4px;font-weight:600;}";
+    html += ".pepe-badge{font-size:0.65rem;background:rgba(0,230,118,0.15);color:var(--pepe);padding:2px 6px;border-radius:4px;font-weight:700;}";
     html += ".btn{width:100%;background:var(--cyan);color:#000;border:none;border-radius:8px;padding:14px;font-weight:700;font-size:0.95rem;cursor:pointer;margin-top:10px;letter-spacing:1px;}";
     html += ".btn-scan{padding:6px 12px;font-size:0.75rem;background:var(--border);color:var(--text);border-radius:6px;border:none;cursor:pointer;}";
     html += ".btn-scan:hover{background:#2a334d;}";
@@ -232,69 +236,97 @@ void WebPortal::handleRoot() {
 
     // STEP 1: SECURITY PINS & SETUP PASSWORD
     html += "<div class='card'><div class='card-title'>1. Master PIN & Setup Security Passwords</div>";
-    html += "<div class='form-group'><label>Master Device PIN (4-8 Digits)</label>";
-    html += "<input type='password' name='pin' maxlength='8' pattern='[0-9]*' placeholder='1234' value='" + String(_newPin) + "' required>";
-    html += "<div class='field-desc'>Entered on the physical 0.96\" screen to unlock the crypto vault & transaction signers.</div></div>";
+    html += "<div class='form-group'><label>Master Device PIN (4 to 8 Digits)</label>";
+    html += "<input type='password' name='pin' minlength='4' maxlength='8' pattern='[0-9]{4,8}' placeholder='1234' value='" + String(_newPin) + "' required>";
+    html += "<div class='field-desc'>Supports 4 to 8 numeric digits. The on-device display dynamically scales boxes to fit your PIN length.</div></div>";
 
-    html += "<div class='form-group'><label>Setup Portal Admin Password</label>";
+    html += "<div class='form-group'><label>Setup Portal Admin Password (Required)</label>";
     if (_isProvisioned && strlen(_storedPasswordHash) > 0) {
         html += "<input type='password' name='setup_pass' placeholder='Leave blank to keep current setup password'>";
-        html += "<div class='field-desc'>Setup password is currently set. Enter a new password only if you wish to change it.</div>";
+        html += "<div class='field-desc'>Setup password is set. Enter a new password only if you wish to change it.</div>";
     } else {
-        html += "<input type='password' name='setup_pass' placeholder='Create a strong password for this setup page' required>";
-        html += "<div class='field-desc'>Protects this web portal against unauthorized tampering if someone plugs in your dongle.</div>";
+        html += "<input type='password' name='setup_pass' minlength='4' placeholder='Create a strong admin password' required>";
+        html += "<div class='field-desc'>Locks this web portal against unauthorized tampering if someone plugs in your key.</div>";
     }
     html += "</div>";
 
     html += "<div class='form-group'><label>Duress Wipe PIN (Optional Decoy)</label>";
     html += "<input type='password' name='duress' maxlength='8' pattern='[0-9]*' placeholder='8888' value='" + String(_newDuressPin) + "'>";
-    html += "<div class='warning-box'>Entering this PIN triggers an instant cryptographic flash erase, scrubs all keys, and renders an authentic Guru Meditation crash decoy.</div>";
+    html += "<div class='warning-box'>Entering this PIN triggers an instant cryptographic flash scrub and authentic crash decoy.</div>";
     html += "</div></div>";
 
-    // STEP 2: WI-FI PROFILES
-    html += "<div class='card'><div class='card-title'><span>2. Wi-Fi Configuration</span>";
+    // STEP 2: MULTI-NETWORK WI-FI PROFILES
+    html += "<div class='card'><div class='card-title'><span>2. Wi-Fi Configuration (Multi-Network Storage)</span>";
     html += "<button type='button' class='btn-scan' onclick='scanWifi()'>Scan SSIDs</button></div>";
-    html += "<div class='form-group'><label>Network SSID (2.4 GHz)</label>";
-    html += "<input type='text' id='ssid' name='ssid' placeholder='Home or Mobile Hotspot'>";
-    html += "<select id='ssid_select' style='display:none;margin-top:6px;' onchange='selectSsid(this)'><option value=''>-- Select Nearby Network --</option></select>";
-    html += "</div>";
-    html += "<div class='form-group'><label>Wi-Fi Password</label>";
-    html += "<input type='password' name='pass' placeholder='WPA2 / WPA3 Password'></div></div>";
+    html += "<div class='field-desc' style='margin-bottom:12px;'>Enter multiple networks (Home, Friend, Hotspot, Library). All are saved permanently into flash NVS—the device connects automatically whenever in range.</div>";
 
-    // STEP 3: ASSET SELECTION (Zero manual balance entry)
-    html += "<div class='card'><div class='card-title'>3. Active Cryptocurrencies (Automated On-Chain Tracking)</div>";
-    html += "<div class='explainer' style='margin-bottom:12px;'>";
-    html += "<b>⚡ Automated On-Chain Tracking Active:</b><br>";
-    html += "Your Crypto TKey S3 derives genuine deposit addresses directly from your master seed for all enabled blockchains (Bitcoin SegWit, Ethereum EVM, Solana, Dogecoin, etc.). You never need to manually enter balances—when connected, balances and market metrics are synchronized automatically.";
+    // Slot 1 (Primary / Active)
+    html += "<div class='form-group'><label>Network 1 (Home / Primary)</label>";
+    html += "<input type='text' id='ssid_0' name='ssid_0' placeholder='Home Wi-Fi SSID'>";
+    html += "<select id='ssid_select' style='display:none;margin-top:6px;' onchange='selectSsid(this)'><option value=''>-- Select Nearby Network --</option></select>";
+    html += "<input type='password' name='pass_0' style='margin-top:6px;' placeholder='WPA2/WPA3 Password'></div>";
+
+    // Slot 2 (Secondary / Friend / Work)
+    html += "<div class='form-group'><label>Network 2 (Friend / Work / Hotspot)</label>";
+    html += "<input type='text' name='ssid_1' placeholder='Secondary SSID (Optional)'>";
+    html += "<input type='password' name='pass_1' style='margin-top:6px;' placeholder='Password (Optional)'></div>";
+
+    // Slot 3 (Tertiary / Public)
+    html += "<div class='form-group'><label>Network 3 (Library / Travel)</label>";
+    html += "<input type='text' name='ssid_2' placeholder='Tertiary SSID (Optional)'>";
+    html += "<input type='password' name='pass_2' style='margin-top:6px;' placeholder='Password (Optional)'></div>";
+
     html += "</div>";
+
+    // STEP 3: ASSET SELECTION & MEME COIN SUPPORT
+    html += "<div class='card'><div class='card-title'>3. Active Cryptocurrencies & Meme Coins</div>";
+    html += "<div class='explainer' style='margin-bottom:10px;'>";
+    html += "<b>⚡ Selective Wallet Architecture:</b><br>";
+    html += "Only the coins you check below will exist on your device. If you select only Bitcoin, it operates strictly as a Bitcoin wallet. If you select Bitcoin and Pepe, it tracks only those two.";
+    html += "</div>";
+
+    html += "<div class='filter-bar'>";
+    html += "<button type='button' class='btn-filter' onclick='setAll(true)'>Select All</button>";
+    html += "<button type='button' class='btn-filter' onclick='setAll(false)'>Clear All</button>";
+    html += "<button type='button' class='btn-filter' onclick='selectPreset(\"l1\")'>Top L1s Only</button>";
+    html += "<button type='button' class='btn-filter' onclick='selectPreset(\"meme\")'>Meme Coins Only</button>";
+    html += "</div>";
+
     html += "<div class='coins-grid'>";
     for (int i = 0; i < CryptoCoinRegistry::getCoinCount(); i++) {
         const CoinAsset* coin = CryptoCoinRegistry::getCoin((SupportedCoinId)i);
         if (!coin) continue;
-        html += "<div class='coin-pill'>";
-        html += "<label class='coin-lbl'><input type='checkbox' name='c_" + String(i) + "' value='1' " + (coin->enabled ? "checked" : "") + ">";
+        bool isPepe = (strcmp(coin->symbol, "PEPE") == 0);
+        bool isMeme = isPepe || (strcmp(coin->symbol, "DOGE") == 0) || (strcmp(coin->symbol, "SHIB") == 0) || (strcmp(coin->symbol, "BONK") == 0) || (strcmp(coin->symbol, "FLOKI") == 0) || (strcmp(coin->symbol, "WIF") == 0);
+
+        html += "<div class='coin-pill' data-meme='" + String(isMeme ? "1" : "0") + "'>";
+        html += "<label class='coin-lbl'><input type='checkbox' class='coin-chk' name='c_" + String(i) + "' value='1' " + (coin->enabled ? "checked" : "") + ">";
         html += "<span>" + String(coin->symbol) + "</span></label>";
-        html += "<span class='auto-badge'>⚡ Auto-Track</span>";
+        if (isPepe) {
+            html += "<span class='pepe-badge'>🐸 PEPE</span>";
+        } else {
+            html += "<span class='auto-badge'>⚡ Auto</span>";
+        }
         html += "</div>";
     }
     html += "</div></div>";
 
-    // STEP 4: AIR-GAPPED SEED VERIFICATION (Zero HTTP Leakage)
+    // STEP 4: AIR-GAPPED SEED RECOVERY
     html += "<div class='card'><div class='card-title'>4. Master Recovery Seed</div>";
     html += "<div class='seed-shield'>";
-    html += "<h3>🔒 Air-Gapped Display Security</h3>";
-    html += "<p>Your 12-word recovery mnemonic is generated directly on the ESP32-S3 TRNG and displayed <strong>exclusively on the physical 0.96\" TFT LCD</strong>.</p>";
-    html += "<p style='margin-top:6px; color:var(--amber); font-weight:600;'>To guarantee zero air-sniffing or network interception, words are NEVER transmitted to web browsers.</p>";
+    html += "<h3>🔒 Dual-Tier Air-Gapped Security</h3>";
+    html += "<p>Your single 12-word master recovery seed controls all your selected cryptocurrencies (Bitcoin, Ethereum, Solana, Pepe, etc.).</p>";
+    html += "<p style='margin-top:6px; color:var(--amber); font-weight:600;'>Seed words are generated via hardware TRNG and displayed exclusively on the physical 0.96\" screen.</p>";
     html += "</div>";
     html += "<div class='explainer'>";
-    html += "<b>🛡️ Zero Setup Needed for WebAuthn / Passkeys:</b><br>";
-    html += "When plugged into USB, your T-Dongle S3 functions as a native FIDO2/WebAuthn authenticator. Passkeys work out of the box with 1-tap physical touch.";
+    html += "<b>🛡️ On-Device Seed Recovery (Guarded by PIN):</b><br>";
+    html += "Once setup is complete, you can review your 12 recovery words on the device anytime by unlocking the vault with your Master PIN and double-tapping the button.";
     html += "</div></div>";
 
     html += "<button type='submit' class='btn'>SAVE & LAUNCH TKEY</button>";
     html += "</form></div>";
 
-    // Client-side script for interactive WiFi scanning
+    // Client-side script for interactive WiFi scanning and coin filtering
     html += "<script>";
     html += "function scanWifi(){";
     html += "const btn=document.querySelector('.btn-scan');";
@@ -312,12 +344,23 @@ void WebPortal::handleRoot() {
     html += "sel.appendChild(opt);";
     html += "});";
     html += "sel.style.display='block';";
-    html += "if(nets.length>0){document.getElementById('ssid').value=nets[0].ssid;}";
+    html += "if(nets.length>0){document.getElementById('ssid_0').value=nets[0].ssid;}";
     html += "})";
     html += ".catch(()=>{btn.innerText='Retry';});";
     html += "}";
     html += "function selectSsid(elem){";
-    html += "if(elem.value){document.getElementById('ssid').value=elem.value;}";
+    html += "if(elem.value){document.getElementById('ssid_0').value=elem.value;}";
+    html += "}";
+    html += "function setAll(en){";
+    html += "document.querySelectorAll('.coin-chk').forEach(c=>c.checked=en);";
+    html += "}";
+    html += "function selectPreset(type){";
+    html += "document.querySelectorAll('.coin-chk').forEach(c=>{";
+    html += "const pill=c.closest('.coin-pill');";
+    html += "const isMeme=pill.getAttribute('data-meme')==='1';";
+    html += "if(type==='meme'){ c.checked=isMeme; }";
+    html += "else if(type==='l1'){ c.checked=!isMeme; }";
+    html += "});";
     html += "}";
     html += "</script></body></html>";
 
@@ -353,13 +396,17 @@ void WebPortal::handleSave() {
         }
     }
 
+    // Master PIN (4 to 8 digits)
     if (_server->hasArg("pin")) {
         String p = _server->arg("pin");
+        p.trim();
         if (p.length() >= 4 && p.length() <= 8) {
             strncpy(_newPin, p.c_str(), sizeof(_newPin) - 1);
+            _newPin[sizeof(_newPin) - 1] = '\0';
         }
     }
 
+    // Setup Admin Password
     if (_server->hasArg("setup_pass")) {
         String sp = _server->arg("setup_pass");
         sp.trim();
@@ -370,26 +417,48 @@ void WebPortal::handleSave() {
         }
     }
 
+    // Duress PIN
     if (_server->hasArg("duress")) {
         String dp = _server->arg("duress");
+        dp.trim();
         if (dp.length() >= 4 && dp.length() <= 8) {
             strncpy(_newDuressPin, dp.c_str(), sizeof(_newDuressPin) - 1);
+            _newDuressPin[sizeof(_newDuressPin) - 1] = '\0';
         }
     }
 
-    // Add Wi-Fi credentials if provided
-    String s = _server->hasArg("ssid") ? _server->arg("ssid") : "";
-    String pass = _server->hasArg("pass") ? _server->arg("pass") : (_server->hasArg("wifipass") ? _server->arg("wifipass") : "");
-    if (s.length() > 0 && _wifi) {
-        _wifi->addNetwork(s.c_str(), pass.c_str());
-        Serial.printf("[PORTAL] Registered Wi-Fi SSID '%s'\n", s.c_str());
+    // Multi-Network Wi-Fi Storage (Slots 0..2 + legacy ssid/pass)
+    if (_wifi) {
+        for (int i = 0; i < 3; i++) {
+            String sKey = "ssid_" + String(i);
+            String pKey = "pass_" + String(i);
+            if (_server->hasArg(sKey)) {
+                String s = _server->arg(sKey);
+                s.trim();
+                String p = _server->hasArg(pKey) ? _server->arg(pKey) : "";
+                if (s.length() > 0) {
+                    _wifi->addNetwork(s.c_str(), p.c_str());
+                    Serial.printf("[PORTAL] Registered Wi-Fi Profile [%d]: '%s'\n", i, s.c_str());
+                }
+            }
+        }
+        // Fallback for single ssid/pass
+        if (_server->hasArg("ssid")) {
+            String s = _server->arg("ssid");
+            s.trim();
+            String p = _server->hasArg("pass") ? _server->arg("pass") : "";
+            if (s.length() > 0) {
+                _wifi->addNetwork(s.c_str(), p.c_str());
+            }
+        }
     }
 
-    // Update 24 Coins (Enable/Disable toggles, zero manual balance inputs)
+    // Update Coin Selection (Selective Wallet Architecture)
     for (int i = 0; i < CryptoCoinRegistry::getCoinCount(); i++) {
         bool en = _server->hasArg("c_" + String(i));
         CryptoCoinRegistry::setCoinEnabled((SupportedCoinId)i, en);
     }
+    CryptoCoinRegistry::savePreferences();
 
     _setupDone = true;
 
@@ -403,7 +472,7 @@ void WebPortal::handleSave() {
     successHtml += "</style></head><body><div class='card'>";
     successHtml += "<h2>✅ CONFIGURATION SAVED</h2>";
     successHtml += "<p>Your Crypto TKey S3 is provisioned and armed.</p>";
-    successHtml += "<p style='color:#7E8B9F;'>The SoftAP radio has been shut down to prevent heat buildup. Your device is now running cool in secure standalone mode.</p>";
+    successHtml += "<p style='color:#7E8B9F;'>Networks, PINs, and selected wallets have been permanently saved in hardware flash NVS.</p>";
     successHtml += "</div></body></html>";
 
     _server->send(200, "text/html", successHtml);

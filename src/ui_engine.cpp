@@ -1,10 +1,11 @@
 /**
- * ui_engine.cpp — Implementation of High-Fidelity ST7735 UI Renderer
+ * ui_engine.cpp — Implementation of High-Fidelity ST7735 Zero-Cutoff UI Renderer
  * ==============================================================================
  * Follows the lilygo-tdongle-ui-dev specification:
  * - 14px Header Zone (Y: 0..13)
  * - 52px Primary Content Zone (Y: 14..65)
  * - 14px Action / Footer Zone (Y: 66..79)
+ * Zero text clipping: all text strings strictly clamped to fit within 160x80 frame.
  */
 
 #include "ui_engine.h"
@@ -24,7 +25,20 @@ void UiEngine::drawHeader(const char* title, uint16_t headerColor, uint16_t text
     _sprite->drawFastHLine(0, 13, DISP_W, textColor);
     _sprite->setTextColor(textColor, headerColor);
     _sprite->setTextDatum(MC_DATUM);
-    _sprite->drawString(title, DISP_W / 2, 7, 1);
+
+    // Clamp title to max 22 chars to prevent header overflow
+    char cleanTitle[24];
+    if (strlen(title) > 22) {
+        strncpy(cleanTitle, title, 19);
+        cleanTitle[19] = '.';
+        cleanTitle[20] = '.';
+        cleanTitle[21] = '.';
+        cleanTitle[22] = '\0';
+    } else {
+        strncpy(cleanTitle, title, sizeof(cleanTitle) - 1);
+        cleanTitle[sizeof(cleanTitle) - 1] = '\0';
+    }
+    _sprite->drawString(cleanTitle, DISP_W / 2, 7, 1);
 }
 
 void UiEngine::drawFooter(const char* hint, uint16_t barColor, float progress0to1) {
@@ -39,7 +53,19 @@ void UiEngine::drawFooter(const char* hint, uint16_t barColor, float progress0to
     } else {
         _sprite->setTextColor(0xAD55, COLOR_DARK_GRAY);
         _sprite->setTextDatum(MC_DATUM);
-        _sprite->drawString(hint, DISP_W / 2, 73, 1);
+        // Clamp footer string to max 24 chars to avoid screen edge clipping
+        char cleanHint[26];
+        if (strlen(hint) > 24) {
+            strncpy(cleanHint, hint, 21);
+            cleanHint[21] = '.';
+            cleanHint[22] = '.';
+            cleanHint[23] = '.';
+            cleanHint[24] = '\0';
+        } else {
+            strncpy(cleanHint, hint, sizeof(cleanHint) - 1);
+            cleanHint[sizeof(cleanHint) - 1] = '\0';
+        }
+        _sprite->drawString(cleanHint, DISP_W / 2, 73, 1);
     }
 }
 
@@ -70,77 +96,183 @@ void UiEngine::renderBootSplash() {
 
     _sprite->setTextDatum(MC_DATUM);
     _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
-    _sprite->drawString("REAPER SECURITY", DISP_W / 2, 32, 2);
+    _sprite->drawString("REAPER SECURITY", DISP_W / 2, 30, 2);
 
     _sprite->setTextColor(0xAD55, COLOR_BG);
-    _sprite->drawString("FIDO2 / PASSKEY / WYSIWYS", DISP_W / 2, 50, 1);
+    _sprite->drawString("FIDO2 / PASSKEY / WYSIWYS", DISP_W / 2, 48, 1);
 
-    drawFooter("INITIALIZING HARDWARE...", 0, 0.0f);
+    drawFooter("HARDWARE READY", 0, 0.0f);
 
     _sprite->pushSprite(0, 0);
 }
 
-void UiEngine::renderReadyDashboard(uint32_t uptimeSec, bool fidoReady, bool vaultUnlocked) {
+void UiEngine::renderHomeDashboard(uint32_t uptimeSec, const char* wifiSsid, float totalPortfolioUsd, bool isFlipped) {
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
-    drawHeader("SECURITY KEY READY", COLOR_HEADER_BG, COLOR_SIGNAL_GREEN);
+    drawHeader("T-KEY S3 // HOME", COLOR_HEADER_BG, COLOR_NEON_CYAN);
 
     _sprite->setTextDatum(TL_DATUM);
-    _sprite->setTextColor(0xFFFF, COLOR_BG);
-    _sprite->drawString("CTAPHID :", 8, 20, 1);
-    _sprite->setTextColor(fidoReady ? COLOR_SIGNAL_GREEN : COLOR_CRIMSON_PANIC, COLOR_BG);
-    _sprite->drawString(fidoReady ? "ACTIVE (1-TAP UP)" : "OFFLINE", 72, 20, 1);
+    _sprite->setTextColor(0xAD55, COLOR_BG);
+    _sprite->drawString("USB :", 8, 17, 1);
+    _sprite->setTextColor(COLOR_SIGNAL_GREEN, COLOR_BG);
+    _sprite->drawString("READY (HID+CDC)", 44, 17, 1);
 
-    _sprite->setTextColor(0xFFFF, COLOR_BG);
-    _sprite->drawString("VAULT   :", 8, 34, 1);
-    _sprite->setTextColor(vaultUnlocked ? COLOR_NEON_CYAN : COLOR_CYBER_GOLD, COLOR_BG);
-    _sprite->drawString(vaultUnlocked ? "UNLOCKED (PIN OK)" : "LOCKED (PIN REQ)", 72, 34, 1);
+    _sprite->setTextColor(0xAD55, COLOR_BG);
+    _sprite->drawString("WIFI:", 8, 29, 1);
+    if (wifiSsid && strlen(wifiSsid) > 0 && strcmp(wifiSsid, "DISCONNECTED") != 0) {
+        _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
+        char wBuf[20];
+        if (strlen(wifiSsid) > 14) {
+            strncpy(wBuf, wifiSsid, 11);
+            wBuf[11] = '.'; wBuf[12] = '.'; wBuf[13] = '.'; wBuf[14] = '\0';
+        } else {
+            strncpy(wBuf, wifiSsid, sizeof(wBuf) - 1);
+            wBuf[sizeof(wBuf) - 1] = '\0';
+        }
+        _sprite->drawString(wBuf, 44, 29, 1);
+    } else {
+        _sprite->setTextColor(0x7BEF, COLOR_BG);
+        _sprite->drawString("OFFLINE / AIRGAP", 44, 29, 1);
+    }
 
-    char upBuf[24];
-    snprintf(upBuf, sizeof(upBuf), "UPTIME: %lus | 80MHz", uptimeSec);
-    _sprite->setTextColor(0x7BEF, COLOR_BG);
-    _sprite->drawString(upBuf, 8, 48, 1);
+    _sprite->setTextColor(0xAD55, COLOR_BG);
+    _sprite->drawString("SYS :", 8, 41, 1);
+    _sprite->setTextColor(0xDEFB, COLOR_BG);
+    _sprite->drawString("80MHz COOL <35mA", 44, 41, 1);
 
-    drawFooter("[●] HOLD: ENTER PIN VAULT", 0, 0.0f);
+    _sprite->setTextColor(0xAD55, COLOR_BG);
+    _sprite->drawString("PORT:", 8, 53, 1);
+    char pBuf[24];
+    snprintf(pBuf, sizeof(pBuf), "$%.2f USD", totalPortfolioUsd);
+    _sprite->setTextColor(COLOR_CYBER_GOLD, COLOR_BG);
+    _sprite->drawString(pBuf, 44, 53, 1);
+
+    drawFooter("[●] PASSKEY  [▲▲] FLIP", 0, 0.0f);
 
     _sprite->pushSprite(0, 0);
 }
 
-void UiEngine::renderPinScreen(const char* currentDigits, int activeIndex, int currentVal, uint8_t holdStage) {
+void UiEngine::renderPasskeyHub(bool authPending, const char* rpId, float progress0to1) {
+    if (!_sprite) return;
+    _sprite->fillSprite(COLOR_BG);
+
+    if (!authPending) {
+        drawHeader("PASSKEY // AUTH HUB", COLOR_HEADER_BG, COLOR_SIGNAL_GREEN);
+
+        _sprite->setTextDatum(TL_DATUM);
+        _sprite->setTextColor(0xAD55, COLOR_BG);
+        _sprite->drawString("FIDO2  :", 8, 19, 1);
+        _sprite->setTextColor(COLOR_SIGNAL_GREEN, COLOR_BG);
+        _sprite->drawString("CTAP2 / WEBAUTHN", 56, 19, 1);
+
+        _sprite->setTextColor(0xAD55, COLOR_BG);
+        _sprite->drawString("STATUS :", 8, 33, 1);
+        _sprite->setTextColor(0xFFFF, COLOR_BG);
+        _sprite->drawString("READY TO AUTH", 56, 33, 1);
+
+        _sprite->setTextColor(0x7BEF, COLOR_BG);
+        _sprite->drawString("WAITING FOR LOGIN...", 8, 48, 1);
+
+        drawFooter("[●] CRYPTO  [▲▲] HOME", 0, 0.0f);
+    } else {
+        drawHeader("PASSKEY // AUTH REQ", 0x0340, COLOR_SIGNAL_GREEN);
+
+        _sprite->setTextDatum(MC_DATUM);
+        _sprite->setTextColor(0xFFFF, COLOR_BG);
+        _sprite->drawString("LOGIN REQUEST FOR:", DISP_W / 2, 26, 1);
+
+        char dom[20];
+        formatRpDomain(rpId ? rpId : "webauthn", dom, sizeof(dom));
+        _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
+        _sprite->drawString(dom, DISP_W / 2, 44, 2);
+
+        drawFooter("[●] 1-TAP APPROVE", COLOR_SIGNAL_GREEN, progress0to1);
+    }
+
+    _sprite->pushSprite(0, 0);
+}
+
+void UiEngine::renderReadyDashboard(uint32_t uptimeSec, bool fidoReady, bool vaultUnlocked, int activeCoinsCount) {
+    if (!_sprite) return;
+    _sprite->fillSprite(COLOR_BG);
+
+    drawHeader("T-KEY S3 // READY", COLOR_HEADER_BG, COLOR_SIGNAL_GREEN);
+
+    _sprite->setTextDatum(TL_DATUM);
+    _sprite->setTextColor(0xAD55, COLOR_BG);
+    _sprite->drawString("FIDO2 :", 8, 18, 1);
+    _sprite->setTextColor(fidoReady ? COLOR_SIGNAL_GREEN : COLOR_CRIMSON_PANIC, COLOR_BG);
+    _sprite->drawString(fidoReady ? "ACTIVE (1-TAP UP)" : "OFFLINE", 56, 18, 1);
+
+    _sprite->setTextColor(0xAD55, COLOR_BG);
+    _sprite->drawString("VAULT :", 8, 30, 1);
+    _sprite->setTextColor(vaultUnlocked ? COLOR_NEON_CYAN : COLOR_CYBER_GOLD, COLOR_BG);
+    _sprite->drawString(vaultUnlocked ? "UNLOCKED (PIN OK)" : "LOCKED (PIN REQ)", 56, 30, 1);
+
+    _sprite->setTextColor(0xAD55, COLOR_BG);
+    _sprite->drawString("ASSETS:", 8, 42, 1);
+    char cBuf[24];
+    snprintf(cBuf, sizeof(cBuf), "%d Active Coins", activeCoinsCount);
+    _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
+    _sprite->drawString(cBuf, 56, 42, 1);
+
+    char upBuf[28];
+    snprintf(upBuf, sizeof(upBuf), "UPTIME: %lus | 80MHz", uptimeSec);
+    _sprite->setTextColor(0x7BEF, COLOR_BG);
+    _sprite->drawString(upBuf, 8, 54, 1);
+
+    drawFooter("[●] COINS  [■] HOLD: PIN", 0, 0.0f);
+
+    _sprite->pushSprite(0, 0);
+}
+
+void UiEngine::renderPinScreen(const char* currentDigits, int pinLength, int activeIndex, int currentVal, uint8_t holdStage) {
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
     drawHeader("MASTER PIN ENTRY", 0x3000, COLOR_CYBER_GOLD);
 
-    // Render 4 rounded digit box slots
-    const int slotW = 24, slotH = 30;
-    const int startX = 20, startY = 22;
-    const int gap = 8;
+    // Dynamic 4-to-8 digit scaling across 146px width
+    if (pinLength < 4) pinLength = 4;
+    if (pinLength > 8) pinLength = 8;
 
-    for (int i = 0; i < PIN_LENGTH; i++) {
+    int gap = (pinLength >= 7) ? 3 : ((pinLength >= 5) ? 4 : 8);
+    int slotW = (146 - (pinLength - 1) * gap) / pinLength;
+    int totalW = pinLength * slotW + (pinLength - 1) * gap;
+    int startX = (DISP_W - totalW) / 2;
+    int startY = 22;
+    int slotH = 30;
+
+    for (int i = 0; i < pinLength; i++) {
         int x = startX + i * (slotW + gap);
         bool isActive = (i == activeIndex);
 
         uint16_t boxBorder = isActive ? COLOR_CYBER_GOLD : 0x4208;
         uint16_t boxBg     = isActive ? 0x2100 : COLOR_BG;
 
-        _sprite->fillRoundRect(x, startY, slotW, slotH, 4, boxBg);
-        _sprite->drawRoundRect(x, startY, slotW, slotH, 4, boxBorder);
+        _sprite->fillRoundRect(x, startY, slotW, slotH, 3, boxBg);
+        _sprite->drawRoundRect(x, startY, slotW, slotH, 3, boxBorder);
 
         _sprite->setTextDatum(MC_DATUM);
         _sprite->setTextColor(isActive ? 0xFFFF : 0xAD55, boxBg);
 
         char c[2] = { currentDigits[i], '\0' };
         if (isActive) c[0] = '0' + currentVal;
-        _sprite->drawString(c, x + slotW / 2, startY + slotH / 2, 4);
+
+        // Scale font down for 6..8 digits so it never exceeds the box
+        if (slotW >= 24) {
+            _sprite->drawString(c, x + slotW / 2, startY + slotH / 2, 4);
+        } else {
+            _sprite->drawString(c, x + slotW / 2, startY + slotH / 2, 2);
+        }
     }
 
     if (holdStage > 0) {
         float p = (float)holdStage / 100.0f;
         drawFooter("", COLOR_CYBER_GOLD, p);
     } else {
-        drawFooter("TAP:+1 | HOLD:OK | DBL:DEL", 0, 0.0f);
+        drawFooter("TAP:+1 | HOLD:OK | DBL:<", 0, 0.0f);
     }
 
     _sprite->pushSprite(0, 0);
@@ -150,7 +282,7 @@ void UiEngine::renderFidoPrompt(const char* rpId, float progress0to1) {
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
-    drawHeader("WEBAUTHN // USER PRESENCE", COLOR_HEADER_BG, COLOR_SIGNAL_GREEN);
+    drawHeader("WEBAUTHN // PASSKEY", COLOR_HEADER_BG, COLOR_SIGNAL_GREEN);
 
     char dom[20];
     formatRpDomain(rpId, dom, sizeof(dom));
@@ -162,7 +294,7 @@ void UiEngine::renderFidoPrompt(const char* rpId, float progress0to1) {
     _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
     _sprite->drawString(dom, DISP_W / 2, 44, 2);
 
-    drawFooter("", COLOR_SIGNAL_GREEN, progress0to1);
+    drawFooter("[●] 1-TAP TO CONFIRM", COLOR_SIGNAL_GREEN, progress0to1);
 
     _sprite->pushSprite(0, 0);
 }
@@ -171,7 +303,7 @@ void UiEngine::renderCryptoSignPrompt(const char* chain, const char* recipient, 
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
-    drawHeader("WYSIWYS // SIGN TRANSACTION", 0x3000, COLOR_CYBER_GOLD);
+    drawHeader("SIGN TRANSACTION", 0x3000, COLOR_CYBER_GOLD);
 
     char addrTrunc[18];
     truncateAddress(recipient, addrTrunc, sizeof(addrTrunc));
@@ -188,7 +320,7 @@ void UiEngine::renderCryptoSignPrompt(const char* chain, const char* recipient, 
     _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
     _sprite->drawString(addrTrunc, 32, 36, 1);
 
-    drawFooter("[●] HOLD: APPROVE  [▲] DBL: REJECT", 0, 0.0f);
+    drawFooter("[●] HOLD: SIGN  [▲] EXIT", 0, 0.0f);
 
     _sprite->pushSprite(0, 0);
 }
@@ -197,28 +329,27 @@ void UiEngine::renderWalletScreen(const char* coinName, const char* symbol, cons
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
-    // Determine coin-specific branding color
+    // Determine coin branding color
     uint16_t coinColor = COLOR_NEON_CYAN;
-    if (strstr(symbol, "BTC")) coinColor = COLOR_CYBER_GOLD;       // 0xFD80 Gold
-    else if (strstr(symbol, "ETH")) coinColor = 0x9B1F;           // Royal Violet
-    else if (strstr(symbol, "SOL")) coinColor = 0x17EE;           // Neon Turquoise
-    else if (strstr(symbol, "DOGE")) coinColor = 0xFE00;          // Doge Sunny Yellow
+    if (strstr(symbol, "BTC")) coinColor = COLOR_CYBER_GOLD;
+    else if (strstr(symbol, "ETH")) coinColor = 0x9B1F;
+    else if (strstr(symbol, "SOL")) coinColor = 0x17EE;
+    else if (strstr(symbol, "DOGE")) coinColor = 0xFE00;
+    else if (strstr(symbol, "PEPE")) coinColor = 0x2DE4; // Vibrant Pepe Green
 
-    // Vibrant header with colored bar
     drawHeader(coinName, 0x0008, coinColor);
 
-    // Top metadata row: Coin Badge Pill (Left) & Derivation Path (Right)
-    _sprite->fillRoundRect(4, 16, 42, 11, 2, coinColor);
+    // Top metadata row: Coin Symbol (Left) & Derivation Path (Right)
+    _sprite->fillRoundRect(4, 16, 44, 11, 2, coinColor);
     _sprite->setTextDatum(MC_DATUM);
     _sprite->setTextColor(0x0000, coinColor);
-    _sprite->drawString(symbol, 25, 21, 1);
+    _sprite->drawString(symbol, 26, 21, 1);
 
     _sprite->setTextDatum(TR_DATUM);
     _sprite->setTextColor(0x8410, COLOR_BG);
     _sprite->drawString(path, 156, 17, 1);
 
     // Address Display Card (Y: 29..64)
-    // Dark background card with coin-colored left stripe
     _sprite->fillRoundRect(4, 29, DISP_W - 8, 35, 3, 0x0842);
     _sprite->fillRoundRect(4, 29, 3, 35, 1, coinColor);
 
@@ -229,10 +360,9 @@ void UiEngine::renderWalletScreen(const char* coinName, const char* symbol, cons
     if (addrLen <= 23) {
         _sprite->drawString(address ? address : "No Address", 11, 41, 1);
     } else {
-        // Split cleanly across 2 lines for 100% full address readability
-        char line1[26];
+        char line1[24];
         char line2[32];
-        size_t split = (addrLen > 22) ? 22 : addrLen;
+        size_t split = (addrLen > 21) ? 21 : addrLen;
         strncpy(line1, address, split);
         line1[split] = '\0';
         strncpy(line2, address + split, sizeof(line2) - 1);
@@ -243,7 +373,7 @@ void UiEngine::renderWalletScreen(const char* coinName, const char* symbol, cons
         _sprite->drawString(line2, 11, 48, 1);
     }
 
-    drawFooter("[●] TAP: NEXT COIN  [■] HOLD: LOCK", 0, 0.0f);
+    drawFooter("[●] COIN [▲▲] SEED [■] LOCK", 0, 0.0f);
 
     _sprite->pushSprite(0, 0);
 }
@@ -257,6 +387,7 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
     else if (strstr(symbol, "ETH")) coinColor = 0x9B1F;
     else if (strstr(symbol, "SOL")) coinColor = 0x17EE;
     else if (strstr(symbol, "DOGE")) coinColor = 0xFE00;
+    else if (strstr(symbol, "PEPE")) coinColor = 0x2DE4;
 
     char hdr[32];
     snprintf(hdr, sizeof(hdr), "%s (%d/%d) // TRACKER", symbol, activeIdx + 1, totalActive);
@@ -265,28 +396,38 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
     // Primary Content Zone (Y: 14..65)
     _sprite->setTextDatum(TL_DATUM);
 
-    // Balance
+    // Balance formatting (supports large meme coin balances like PEPE cleanly)
     char balStr[32];
-    if (balance < 1000.0f) {
+    if (balance >= 1000000.0f) {
+        snprintf(balStr, sizeof(balStr), "%.2fM %s", balance / 1e6f, symbol);
+    } else if (balance >= 1000.0f) {
+        snprintf(balStr, sizeof(balStr), "%.2fK %s", balance / 1e3f, symbol);
+    } else if (balance > 0.0f) {
         snprintf(balStr, sizeof(balStr), "%.4f %s", balance, symbol);
     } else {
-        snprintf(balStr, sizeof(balStr), "%.1f %s", balance, symbol);
+        snprintf(balStr, sizeof(balStr), "0.00 %s", symbol);
     }
     _sprite->setTextColor(0xFFFF, COLOR_BG);
     _sprite->drawString(balStr, 8, 18, 2);
 
-    // USD Price & 24h change
+    // USD Price formatting (supports micro-dollar meme coin prices like $0.0000105)
     char priceStr[32];
-    snprintf(priceStr, sizeof(priceStr), "$%.2f", priceUsd);
+    if (priceUsd < 0.001f) {
+        snprintf(priceStr, sizeof(priceStr), "$%.7f", priceUsd);
+    } else if (priceUsd < 1.0f) {
+        snprintf(priceStr, sizeof(priceStr), "$%.4f", priceUsd);
+    } else {
+        snprintf(priceStr, sizeof(priceStr), "$%.2f", priceUsd);
+    }
     _sprite->setTextColor(coinColor, COLOR_BG);
     _sprite->drawString(priceStr, 8, 36, 1);
 
     char chgStr[16];
     snprintf(chgStr, sizeof(chgStr), "%s%.1f%%", change24h >= 0 ? "+" : "", change24h);
     _sprite->setTextColor(change24h >= 0 ? COLOR_SIGNAL_GREEN : COLOR_CRIMSON_PANIC, COLOR_BG);
-    _sprite->drawString(chgStr, 75, 36, 1);
+    _sprite->drawString(chgStr, 88, 36, 1);
 
-    // Fiat value of this asset vs total portfolio
+    // Fiat valuation row
     float assetFiat = balance * priceUsd;
     char valStr[32];
     snprintf(valStr, sizeof(valStr), "VAL: $%.2f", assetFiat);
@@ -296,31 +437,31 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
     char totStr[32];
     snprintf(totStr, sizeof(totStr), "TOT: $%.0f", totalPortfolioUsd);
     _sprite->setTextColor(0xAD55, COLOR_BG);
-    _sprite->drawString(totStr, 95, 50, 1);
+    _sprite->drawString(totStr, 96, 50, 1);
 
-    drawFooter("[●] NEXT  [▲] DBL: PREV  [■] HOLD: EXIT", 0, 0.0f);
+    drawFooter("[●] COIN [■] PIN [▲▲] HOME", 0, 0.0f);
 
     _sprite->pushSprite(0, 0);
 }
 
-void UiEngine::renderEntropyGatherScreen(int currentSamples, int requiredSamples) {
+void UiEngine::renderSeedWordsView(int wordNum, int totalWords, const char* word) {
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
-    drawHeader("SEED GENERATOR // ENTROPY", 0x3000, COLOR_CYBER_GOLD);
+    char hdr[32];
+    snprintf(hdr, sizeof(hdr), "RECOVERY SEED (%d/%d)", wordNum, totalWords);
+    drawHeader(hdr, 0x3000, COLOR_CYBER_GOLD);
 
     _sprite->setTextDatum(MC_DATUM);
-    _sprite->setTextColor(0xFFFF, COLOR_BG);
-    _sprite->drawString("TAP BUTTON RANDOMLY", DISP_W / 2, 28, 1);
+    char numStr[24];
+    snprintf(numStr, sizeof(numStr), "SECRET WORD #%d", wordNum);
+    _sprite->setTextColor(0xAD55, COLOR_BG);
+    _sprite->drawString(numStr, DISP_W / 2, 26, 1);
 
-    char countStr[24];
-    snprintf(countStr, sizeof(countStr), "COLLECTED: %d / %d", currentSamples, requiredSamples);
-    _sprite->setTextColor(COLOR_CYBER_GOLD, COLOR_BG);
-    _sprite->drawString(countStr, DISP_W / 2, 44, 2);
+    _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
+    _sprite->drawString(word, DISP_W / 2, 44, 4);
 
-    float p = (float)currentSamples / (float)requiredSamples;
-    if (p > 1.0f) p = 1.0f;
-    drawFooter("", COLOR_CYBER_GOLD, p);
+    drawFooter(wordNum < totalWords ? "[●] NEXT   [■] HOLD: EXIT" : "[●] DONE   [■] HOLD: EXIT", 0, 0.0f);
 
     _sprite->pushSprite(0, 0);
 }
@@ -340,9 +481,31 @@ void UiEngine::renderSeedBackupScreen(int wordNum, int totalWords, const char* w
     _sprite->drawString(numStr, DISP_W / 2, 26, 1);
 
     _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
-    _sprite->drawString(word, DISP_W / 2, 44, 4); // Big font for mnemonic word
+    _sprite->drawString(word, DISP_W / 2, 44, 4);
 
-    drawFooter(wordNum < totalWords ? "[●] TAP: NEXT WORD" : "[■] HOLD: CONFIRM SEED", 0, 0.0f);
+    drawFooter(wordNum < totalWords ? "[●] NEXT WORD" : "[■] HOLD: CONFIRM", 0, 0.0f);
+
+    _sprite->pushSprite(0, 0);
+}
+
+void UiEngine::renderEntropyGatherScreen(int currentSamples, int requiredSamples) {
+    if (!_sprite) return;
+    _sprite->fillSprite(COLOR_BG);
+
+    drawHeader("SEED GENERATOR", 0x3000, COLOR_CYBER_GOLD);
+
+    _sprite->setTextDatum(MC_DATUM);
+    _sprite->setTextColor(0xFFFF, COLOR_BG);
+    _sprite->drawString("TAP BUTTON RANDOMLY", DISP_W / 2, 28, 1);
+
+    char countStr[24];
+    snprintf(countStr, sizeof(countStr), "COLLECTED: %d / %d", currentSamples, requiredSamples);
+    _sprite->setTextColor(COLOR_CYBER_GOLD, COLOR_BG);
+    _sprite->drawString(countStr, DISP_W / 2, 44, 2);
+
+    float p = (float)currentSamples / (float)requiredSamples;
+    if (p > 1.0f) p = 1.0f;
+    drawFooter("", COLOR_CYBER_GOLD, p);
 
     _sprite->pushSprite(0, 0);
 }
@@ -351,7 +514,7 @@ void UiEngine::renderAirGapScreen(const char* psbtFile, const char* summary, boo
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
-    drawHeader("AIR-GAP MICROSD SIGNER", 0x0010, 0x541F);
+    drawHeader("AIR-GAP SIGNER", 0x0010, 0x541F);
 
     _sprite->setTextDatum(MC_DATUM);
     _sprite->setTextColor(0xFFFF, COLOR_BG);
@@ -360,7 +523,7 @@ void UiEngine::renderAirGapScreen(const char* psbtFile, const char* summary, boo
     _sprite->setTextColor(readyToSign ? COLOR_SIGNAL_GREEN : COLOR_CYBER_GOLD, COLOR_BG);
     _sprite->drawString(summary, DISP_W / 2, 44, 2);
 
-    drawFooter(readyToSign ? "[●] HOLD: SIGN PSBT" : "[▲] DBL: EXIT", 0, 0.0f);
+    drawFooter(readyToSign ? "[●] HOLD: SIGN" : "[▲] DBL: EXIT", 0, 0.0f);
 
     _sprite->pushSprite(0, 0);
 }
@@ -371,14 +534,12 @@ void UiEngine::renderAirGapPsbt(const char* fileName, const char* recipient, con
 
     drawHeader("BIP-174 PSBT SIGNER", 0x0010, 0x541F);
 
-    // File name tag
     _sprite->setTextDatum(TL_DATUM);
     _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
     _sprite->drawString(fileName, 6, 16, 1);
 
-    // Recipient Card (Y: 26..51)
     _sprite->fillRoundRect(4, 26, DISP_W - 8, 26, 3, 0x0842);
-    _sprite->fillRoundRect(4, 26, 3, 26, 1, 0x541F); // Sapphire blue accent
+    _sprite->fillRoundRect(4, 26, 3, 26, 1, 0x541F);
 
     _sprite->setTextColor(0xFFFF, 0x0842);
     size_t addrLen = recipient ? strlen(recipient) : 0;
@@ -396,7 +557,6 @@ void UiEngine::renderAirGapPsbt(const char* fileName, const char* recipient, con
         _sprite->drawString(line2, 10, 39, 1);
     }
 
-    // Amount & Fee Row (Y: 53..65)
     _sprite->setTextDatum(TL_DATUM);
     _sprite->setTextColor(COLOR_SIGNAL_GREEN, COLOR_BG);
     _sprite->drawString(amountBtc, 6, 54, 1);
@@ -405,7 +565,7 @@ void UiEngine::renderAirGapPsbt(const char* fileName, const char* recipient, con
     _sprite->setTextColor(COLOR_CYBER_GOLD, COLOR_BG);
     _sprite->drawString(feeStr, 154, 54, 1);
 
-    drawFooter(readyToSign ? "[●] HOLD: SIGN & EXPORT" : "CANNOT SIGN", 0, 0.0f);
+    drawFooter(readyToSign ? "[●] HOLD: SIGN" : "CANNOT SIGN", 0, 0.0f);
 
     _sprite->pushSprite(0, 0);
 }
@@ -434,7 +594,7 @@ void UiEngine::renderSuccessBanner(const char* title, const char* subtitle) {
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
-    _sprite->fillRect(0, 0, DISP_W, DISP_H, 0x0340); // Dark Forest Green
+    _sprite->fillRect(0, 0, DISP_W, DISP_H, 0x0340);
     _sprite->drawRect(0, 0, DISP_W, DISP_H, COLOR_SIGNAL_GREEN);
 
     _sprite->setTextDatum(MC_DATUM);
@@ -454,7 +614,7 @@ void UiEngine::renderErrorBanner(const char* message) {
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
-    _sprite->fillRect(0, 0, DISP_W, DISP_H, 0x5000); // Dark Crimson
+    _sprite->fillRect(0, 0, DISP_W, DISP_H, 0x5000);
     _sprite->drawRect(0, 0, DISP_W, DISP_H, COLOR_CRIMSON_PANIC);
 
     _sprite->setTextDatum(MC_DATUM);
@@ -465,4 +625,9 @@ void UiEngine::renderErrorBanner(const char* message) {
     _sprite->drawString(message, DISP_W / 2, 52, 1);
 
     _sprite->pushSprite(0, 0);
+}
+
+void UiEngine::setRotation(uint8_t rot) {
+    if (_tft) _tft->setRotation(rot);
+    if (_sprite) _sprite->setRotation(rot);
 }

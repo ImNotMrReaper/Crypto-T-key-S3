@@ -7,6 +7,7 @@
 
 uint32_t PowerManager::_lastActivityMs = 0;
 bool     PowerManager::_displaySleeping = false;
+bool     PowerManager::_keepAwake = false;
 
 void PowerManager::init() {
     // 1. Throttle CPU clock to cool 80MHz (drops thermal load by >60% while
@@ -23,16 +24,28 @@ void PowerManager::init() {
 
     _lastActivityMs = millis();
     _displaySleeping = false;
+    _keepAwake = false;
 
     // Ensure display backlight is turned ON initially (Active LOW on GPIO 38)
     pinMode(PIN_TFT_BL, OUTPUT);
     digitalWrite(PIN_TFT_BL, TFT_BL_ON);
 }
 
+void PowerManager::setKeepAwake(bool keepAwake) {
+    _keepAwake = keepAwake;
+    if (_keepAwake && _displaySleeping) {
+        wakeDisplay();
+    }
+}
+
+bool PowerManager::getKeepAwake() {
+    return _keepAwake;
+}
+
 void PowerManager::update(bool userActive) {
     uint32_t now = millis();
 
-    if (userActive) {
+    if (userActive || _keepAwake) {
         _lastActivityMs = now;
         if (_displaySleeping) {
             wakeDisplay();
@@ -40,7 +53,8 @@ void PowerManager::update(bool userActive) {
     }
 
     // Auto-dim / sleep display after DISPLAY_SLEEP_TIMEOUT_MS of inactivity
-    if (!_displaySleeping && (now - _lastActivityMs > DISPLAY_SLEEP_TIMEOUT_MS)) {
+    // strictly skipped if _keepAwake is enabled (e.g. on live price ticker)
+    if (!_keepAwake && !_displaySleeping && (now - _lastActivityMs > DISPLAY_SLEEP_TIMEOUT_MS)) {
         digitalWrite(PIN_TFT_BL, TFT_BL_OFF); // Active LOW: HIGH = OFF
         _displaySleeping = true;
     }
@@ -50,6 +64,15 @@ void PowerManager::wakeDisplay() {
     digitalWrite(PIN_TFT_BL, TFT_BL_ON); // Active LOW: LOW = ON
     _displaySleeping = false;
     _lastActivityMs = millis();
+}
+
+void PowerManager::toggleDisplaySleep() {
+    if (_displaySleeping) {
+        wakeDisplay();
+    } else {
+        _displaySleeping = true;
+        digitalWrite(PIN_TFT_BL, TFT_BL_OFF);
+    }
 }
 
 bool PowerManager::isDisplaySleeping() {

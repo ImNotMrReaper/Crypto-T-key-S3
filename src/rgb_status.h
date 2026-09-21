@@ -15,6 +15,7 @@ enum LedMode {
     LED_MODE_OFF,
     LED_MODE_SOLID_AMBER,      // Locked / PIN entry
     LED_MODE_BREATHE_CYAN,     // Idle Dashboard / Ready
+    LED_MODE_BREATHE_GREEN,    // Passkey Hub Armed / Ready
     LED_MODE_PULSE_GREEN,      // User Presence Auth / Sign Request
     LED_MODE_FLASH_GREEN_OK,   // Action Confirmed
     LED_MODE_SOLID_BLUE,       // Air-Gapped SD Signer
