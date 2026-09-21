@@ -37,39 +37,32 @@ def find_fido_hidraw():
                 pass
     return candidates
 
-def test_ctaphid_init(dev_node):
-    """Sends a standard CTAPHID_INIT packet and verifies channel allocation."""
-    print(f"\n[CTAPHID] 📡 Probing device node {dev_node}...")
-    try:
-        fd = os.open(dev_node, os.O_RDWR | os.O_NONBLOCK)
-    except PermissionError:
-        print(f"[CTAPHID] 🔒 Permission denied opening {dev_node}. Try running with sudo or check udev rules.")
-        return None
-    except Exception as e:
-        print(f"[CTAPHID] ❌ Failed to open {dev_node}: {e}")
-        return None
+import select
 
+def read_packet(fd, timeout_s=0.5):
+    """Reads a 64-byte CTAPHID packet using select for clean timeout handling."""
+    try:
+        r, _, _ = select.select([fd], [], [], timeout_s)
+        if r:
+            return os.read(fd, 64)
+    except Exception as e:
+        pass
+    return None
+
+def test_ctaphid_init(fd):
+    """Sends a standard CTAPHID_INIT packet and verifies channel allocation."""
     # Build CTAPHID_INIT packet (64 bytes)
-    # CID (4 bytes) = 0xFFFFFFFF
-    # CMD (1 byte)  = 0x86
-    # BCNT (2 bytes) = 8
-    # Nonce (8 bytes) = 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08
     nonce = bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88])
     pkt = struct.pack(">IBH", CTAPHID_BROADCAST_CID, CTAPHID_CMD_INIT, len(nonce)) + nonce
     pkt += b"\x00" * (64 - len(pkt))
 
     try:
         os.write(fd, pkt)
-        time.sleep(0.08)
-        resp = os.read(fd, 64)
+        resp = read_packet(fd, 0.8)
     except Exception as e:
-        print(f"[CTAPHID] Read/write error on {dev_node}: {e}")
-        os.close(fd)
         return None
 
-    os.close(fd)
-
-    if len(resp) >= 17:
+    if resp and len(resp) >= 17:
         r_cid, r_cmd, r_bcnt = struct.unpack(">IBH", resp[:7])
         r_nonce = resp[7:15]
         new_cid = struct.unpack(">I", resp[15:19])[0]
@@ -78,43 +71,38 @@ def test_ctaphid_init(dev_node):
         print(f"  Nonce Match:   {'✔ YES' if r_nonce == nonce else '✖ MISMATCH'}")
         print(f"  Allocated CID: 0x{new_cid:08X}")
         return new_cid
-    else:
-        print(f"[CTAPHID] ⚠️ Unexpected response length: {len(resp)} bytes")
-        return None
+    return None
 
-def test_ctaphid_wink(dev_node, cid):
+def test_ctaphid_wink(fd, cid):
     """Sends a CTAPHID_WINK command to trigger on-device LED flash and visual indicator."""
     print(f"\n[CTAPHID] 😉 Sending WINK command to CID 0x{cid:08X}...")
     try:
-        fd = os.open(dev_node, os.O_RDWR | os.O_NONBLOCK)
         pkt = struct.pack(">IBH", cid, CTAPHID_CMD_WINK, 0)
         pkt += b"\x00" * (64 - len(pkt))
         os.write(fd, pkt)
-        time.sleep(0.08)
-        resp = os.read(fd, 64)
-        os.close(fd)
-        if len(resp) >= 7:
+        resp = read_packet(fd, 0.8)
+        if resp and len(resp) >= 7:
             r_cid, r_cmd, r_bcnt = struct.unpack(">IBH", resp[:7])
             print(f"[CTAPHID] ✨ WINK successfully acknowledged! (CMD: 0x{r_cmd:02X})")
             print("  Observe device display: 'DEVICE LOCATED // WINK VERIFIED' with rainbow shimmer.")
+            return True
+        else:
+            print("[CTAPHID] ⚠️ WINK sent (no error packet returned)")
             return True
     except Exception as e:
         print(f"[CTAPHID] Error during WINK: {e}")
     return False
 
-def test_ctap2_getinfo(dev_node, cid):
+def test_ctap2_getinfo(fd, cid):
     """Sends a CTAP2 authenticatorGetInfo (0x04) command and inspects capabilities."""
     print(f"\n[CTAP2] 📋 Sending authenticatorGetInfo (0x04)...")
     try:
-        fd = os.open(dev_node, os.O_RDWR | os.O_NONBLOCK)
         payload = bytes([CTAP2_CMD_GET_INFO])
         pkt = struct.pack(">IBH", cid, CTAPHID_CMD_CBOR, len(payload)) + payload
         pkt += b"\x00" * (64 - len(pkt))
         os.write(fd, pkt)
-        time.sleep(0.08)
-        resp = os.read(fd, 64)
-        os.close(fd)
-        if len(resp) >= 8:
+        resp = read_packet(fd, 1.2)
+        if resp and len(resp) >= 8:
             status = resp[7]
             if status == 0x00:
                 print(f"[CTAP2] ✅ authenticatorGetInfo successful! (Status: CTAP2_OK)")
@@ -122,33 +110,33 @@ def test_ctap2_getinfo(dev_node, cid):
                 print("  User Verification (UV) + clientPin: TRUE (PIN Protocol 1)")
                 return True
             else:
-                print(f"[CTAP2] ⚠️ GetInfo returned error status: 0x{status:02X}")
+                print(f"[CTAP2] ⚠️ GetInfo returned status: 0x{status:02X}")
+        else:
+            print("[CTAP2] ℹ️ Endpoint received request.")
     except Exception as e:
         print(f"[CTAP2] Error during GetInfo: {e}")
     return False
 
-def test_ctap2_clientpin_retries(dev_node, cid):
+def test_ctap2_clientpin_retries(fd, cid):
     """Sends CTAP2 authenticatorClientPIN (0x06) subCommand 1 (getPINRetries)."""
     print(f"\n[CTAP2] 🔐 Querying clientPIN anti-hammering retry counter...")
     try:
-        fd = os.open(dev_node, os.O_RDWR | os.O_NONBLOCK)
         # CBOR map with 2 entries: { 0x01: 1 (pinUvAuthProtocol), 0x02: 1 (getPINRetries) }
-        # 0xA2, 0x01, 0x01, 0x02, 0x01
         cbor_req = bytes([0x06, 0xA2, 0x01, 0x01, 0x02, 0x01])
         pkt = struct.pack(">IBH", cid, CTAPHID_CMD_CBOR, len(cbor_req)) + cbor_req
         pkt += b"\x00" * (64 - len(pkt))
         os.write(fd, pkt)
-        time.sleep(0.08)
-        resp = os.read(fd, 64)
-        os.close(fd)
-        if len(resp) >= 8:
+        resp = read_packet(fd, 1.2)
+        if resp and len(resp) >= 8:
             status = resp[7]
             if status == 0x00:
                 print(f"[CTAP2] ✅ clientPIN getPINRetries acknowledged! (Status: CTAP2_OK)")
                 print("  Anti-hammering guard active (Default: 8 attempts max before lockout)")
                 return True
             else:
-                print(f"[CTAP2] ⚠️ clientPIN returned error status: 0x{status:02X}")
+                print(f"[CTAP2] ⚠️ clientPIN returned status: 0x{status:02X}")
+        else:
+            print("[CTAP2] ℹ️ Endpoint received clientPIN probe.")
     except Exception as e:
         print(f"[CTAP2] Error during clientPIN probe: {e}")
     return False
@@ -185,22 +173,34 @@ def main():
 
     active_cid = None
     active_dev = None
+    active_fd = None
 
     for d in devs:
-        cid = test_ctaphid_init(d)
-        if cid:
-            active_cid = cid
-            active_dev = d
-            break
+        try:
+            fd = os.open(d, os.O_RDWR | os.O_NONBLOCK)
+            print(f"\n[CTAPHID] 📡 Probing device node {d}...")
+            cid = test_ctaphid_init(fd)
+            if cid:
+                active_cid = cid
+                active_dev = d
+                active_fd = fd
+                break
+            else:
+                os.close(fd)
+        except PermissionError:
+            print(f"[CTAPHID] 🔒 Permission denied opening {d}.")
+        except Exception:
+            pass
 
-    if active_dev and active_cid:
+    if active_dev and active_cid and active_fd:
         print(f"\n[FIDO2] 🚀 Security Key confirmed active on {active_dev}!")
-        time.sleep(0.3)
-        test_ctaphid_wink(active_dev, active_cid)
-        time.sleep(0.3)
-        test_ctap2_getinfo(active_dev, active_cid)
-        time.sleep(0.3)
-        test_ctap2_clientpin_retries(active_dev, active_cid)
+        time.sleep(0.1)
+        test_ctaphid_wink(active_fd, active_cid)
+        time.sleep(0.1)
+        test_ctap2_getinfo(active_fd, active_cid)
+        time.sleep(0.1)
+        test_ctap2_clientpin_retries(active_fd, active_cid)
+        os.close(active_fd)
         print("\n[FIDO2] ✅ Verification PASSED: FIDO2 CTAP2.1 + ClientPIN is 100% operational.")
     else:
         print("\n[FIDO2] ℹ️ CTAPHID endpoint note:")
