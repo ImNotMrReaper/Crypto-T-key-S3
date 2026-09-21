@@ -330,6 +330,29 @@ void WebPortal::handleSave() {
         return;
     }
 
+    // Require Setup Admin Password on initial provisioning
+    if (strlen(_storedPasswordHash) == 0) {
+        String sp = _server->hasArg("setup_pass") ? _server->arg("setup_pass") : "";
+        sp.trim();
+        if (sp.length() < 4) {
+            String errHtml = "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'>";
+            errHtml += "<meta name='viewport' content='width=device-width,initial-scale=1.0'>";
+            errHtml += "<title>Password Required</title><style>";
+            errHtml += "body{background:#0A0D14;color:#FF1744;font-family:system-ui,-apple-system,sans-serif;text-align:center;padding:40px 16px;}";
+            errHtml += ".card{background:#121622;border:1px solid #FF1744;border-radius:12px;padding:24px;max-width:420px;margin:0 auto;}";
+            errHtml += "h2{color:#FF1744;margin-bottom:12px;font-size:1.1rem;}";
+            errHtml += "p{color:#F0F4FC;font-size:0.85rem;line-height:1.5;margin-bottom:16px;}";
+            errHtml += ".btn{background:#00E5FF;color:#000;border:none;border-radius:8px;padding:10px 20px;font-weight:700;text-decoration:none;font-size:0.9rem;}";
+            errHtml += "</style></head><body><div class='card'>";
+            errHtml += "<h2>⚠️ SETUP PASSWORD REQUIRED</h2>";
+            errHtml += "<p>You must enter a Setup Portal Admin Password (at least 4 characters). This protects your security key so no one can access this page or change your Master PIN.</p>";
+            errHtml += "<a href='/' class='btn'>← GO BACK & SET PASSWORD</a>";
+            errHtml += "</div></body></html>";
+            _server->send(400, "text/html", errHtml);
+            return;
+        }
+    }
+
     if (_server->hasArg("pin")) {
         String p = _server->arg("pin");
         if (p.length() >= 4 && p.length() <= 8) {

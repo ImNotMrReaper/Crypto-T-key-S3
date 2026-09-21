@@ -666,7 +666,7 @@ void resetPinEntry() {
 void loadSecurityConfig() {
     vaultPrefs.begin("vault_sec", false);
     if (!vaultPrefs.isKey("provisioned")) {
-        vaultPrefs.putBool("provisioned", true);
+        vaultPrefs.putBool("provisioned", false);
         vaultPrefs.putString("user_pin", DEFAULT_MASTER_PIN);
         strncpy(masterPin, DEFAULT_MASTER_PIN, PIN_LENGTH);
     } else {
