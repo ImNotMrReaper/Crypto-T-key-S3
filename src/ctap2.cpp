@@ -474,7 +474,7 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
         return;
     }
 
-    // 1. Derive credential keypair
+    // 1. Derive credential keypair — keep privKey alive until AFTER signing
     uint8_t privKey[32];
     uint8_t credId[32];
     cryptoP256.deriveCredentialKey(rpId, userId, userIdLen, privKey, credId);
@@ -483,7 +483,7 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
     cryptoP256.generateKeypair(privKey, pubKeyRaw);
     mbedtls_platform_zeroize(privKey, sizeof(privKey)); // Clean zeroize immediately after keygen
 
-    // 2. Build COSE Public Key
+    // 2. Build COSE Public Key (canonical CBOR integer key order: 1,3,-1,-2,-3)
     uint8_t coseKey[128];
     CborEncoder coseEnc(coseKey, sizeof(coseKey));
     coseEnc.encodeMapHeader(5);
@@ -498,7 +498,7 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
     coseEnc.encodeInt(-3); // y
     coseEnc.encodeBytes(pubKeyRaw + 32, 32);
 
-    // 3. Construct AuthData: rpIdHash (32) || flags (1) || signCount (4) || AAGUID (16) || credIdLen (2) || credId (32) || coseKey
+    // 3. Construct AuthData: rpIdHash(32)||flags(1)||signCount(4)||AAGUID(16)||credIdLen(2)||credId(32)||coseKey
     uint8_t authData[256];
     size_t adOffset = 0;
 
@@ -525,21 +525,52 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
     memcpy(authData + adOffset, coseKey, coseEnc.getLength());
     adOffset += coseEnc.getLength();
 
-    // 4. Assemble CBOR Response
-    // 0x01: fmt ("packed" or "none")
-    // 0x02: authData (bytes)
-    // 0x03: attStmt (empty map for "none")
-    uint8_t respBuf[512];
+    // 4. "packed" Basic Attestation with batch X.509 certificate:
+    //    Sign SHA-256(authData || clientDataHash) with U2F_ATTESTATION_PRIVKEY
+    //    attStmt = {alg: -7, sig: <DER ECDSA>, x5c: [<X.509 DER cert>]}
+    //    This satisfies BOTH modern verifiers (WebAuthn, OpenSSH) and legacy validators (pamu2fcfg 1.1.0)
+    uint8_t sigInput[288]; // authData (max ~165) + clientDataHash (32)
+    memcpy(sigInput, authData, adOffset);
+    memcpy(sigInput + adOffset, clientDataHash, clientDataHashLen);
+
+    uint8_t digest[32];
+    CryptoP256::sha256(sigInput, adOffset + clientDataHashLen, digest);
+
+    uint8_t sigDer[72];
+    size_t  sigLen = 0;
+    bool    sigOk  = cryptoP256.signDigest(U2F_ATTESTATION_PRIVKEY, digest, sigDer, &sigLen);
+
+    if (!sigOk || sigLen == 0) {
+        uint8_t err = CTAP2_ERR_OTHER;
+        ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, &err, 1);
+        return;
+    }
+
+    // 5. Assemble CBOR Response: {1:"packed", 2:authData, 3:{alg:-7, sig:<bytes>, x5c:[<cert>]}}
+    uint8_t respBuf[800];
     respBuf[0] = CTAP2_OK;
 
     CborEncoder respEnc(respBuf + 1, sizeof(respBuf) - 1);
     respEnc.encodeMapHeader(3);
+
+    // Key 1: fmt = "packed"
     respEnc.encodeUnsigned(0x01);
-    respEnc.encodeText("none");
+    respEnc.encodeText("packed");
+
+    // Key 2: authData
     respEnc.encodeUnsigned(0x02);
     respEnc.encodeBytes(authData, adOffset);
+
+    // Key 3: attStmt = {alg: -7, sig: <DER ECDSA signature>, x5c: [<cert>]}
     respEnc.encodeUnsigned(0x03);
-    respEnc.encodeMapHeader(0); // empty attStmt
+    respEnc.encodeMapHeader(3);
+    respEnc.encodeText("alg");
+    respEnc.encodeInt(-7); // ES256
+    respEnc.encodeText("sig");
+    respEnc.encodeBytes(sigDer, sigLen);
+    respEnc.encodeText("x5c");
+    respEnc.encodeArrayHeader(1);
+    respEnc.encodeBytes(U2F_ATTESTATION_CERT, sizeof(U2F_ATTESTATION_CERT));
 
     ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, respBuf, 1 + respEnc.getLength());
 }

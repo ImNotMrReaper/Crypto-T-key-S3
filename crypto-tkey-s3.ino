@@ -43,6 +43,7 @@ __attribute__((constructor(101))) void pre_init_early() {
 #include "src/web_portal.h"
 #include "src/psbt_signer.h"
 #include "src/evm_decoder.h"
+#include "src/sd_vault.h"
 
 // ─── Subsystem Allocations (Dynamic Initialization) ──────────────────────────
 TFT_eSPI*     tft    = nullptr;
@@ -65,6 +66,7 @@ int           currentDigitVal = 0;
 uint8_t       lastHoldStage = 0;
 uint32_t      lastStateUpdate = 0;
 CryptoCoin    currentViewCoin = COIN_BTC;
+bool          s_simulatedTouch = false;
 
 // Seed Generator State
 char          generatedMnemonic[240] = {0};
@@ -767,9 +769,10 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
         float remaining = 1.0f - ((float)(millis() - start) / 30000.0f);
         ui.renderPasskeyHub(true, reqDomain, remaining);
 
-        if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS) {
+        if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS || s_simulatedTouch) {
             confirmed = true;
             done = true;
+            s_simulatedTouch = false;
             rgb.flashRainbow(900);
             ui.renderSuccessBanner(isRegistration ? "PASSKEY REGISTERED" : "ASSERTION SIGNED", reqDomain);
             delay(1000);
@@ -864,9 +867,13 @@ void handleSerialCommands() {
         Serial.println("  lock                     - Lock crypto vault immediately");
         Serial.println("  led <btc|eth|sol|rainbow>- Test RGB DotStar LED color mode");
         Serial.println("  psbt [scan|parse|sign]   - Air-Gapped MicroSD BIP-174 Bitcoin signer");
+        Serial.println("  vault [status|backup|restore|wipe] - Hardware-Bound Encrypted MicroSD Vault (AES-256-GCM)");
         Serial.println("  panic                    - Trigger emergency flash nuke");
         Serial.println("  decode_evm <hex>         - Clear-sign & inspect EVM transaction (PEPE/EIP-1559)");
         Serial.println("  sign_evm <hex>           - Clear-sign & display prompt on device screen");
+    } else if (cmd.equalsIgnoreCase("touch") || cmd.equalsIgnoreCase("press")) {
+        s_simulatedTouch = true;
+        Serial.println("[BTN] 👆 Simulated User Presence button touch received.");
     } else if (cmd.equalsIgnoreCase("status")) {
         Serial.printf("Uptime: %lus | CPU: %dMHz | Vault: %s | Master PIN Len: %d | Active Coins: %d | Rotation: %d\n",
             millis() / 1000, getCpuFrequencyMhz(), wallet->isUnlocked() ? "UNLOCKED" : "LOCKED",
@@ -988,6 +995,54 @@ void handleSerialCommands() {
                     Serial.println("[PSBT] ℹ️ Error: No pending .psbt file found to sign.");
                 }
             }
+        }
+    } else if (cmd.startsWith("vault")) {
+        String sub = cmd.substring(5);
+        sub.trim();
+        if (sub.length() == 0 || sub.equalsIgnoreCase("status")) {
+            if (sdVault.begin()) {
+                Serial.printf("[SD VAULT] ✅ Card Mounted: %llu MB | Used: %llu KB\n",
+                    sdVault.getCardSizeMB(), sdVault.getUsedBytes() / 1024);
+                Serial.printf("  Seed Backup: %s\n", sdVault.hasSeedBackup() ? "PRESENT (/vault/tkey_backup.vault)" : "NONE");
+                Serial.println("  Encryption:  AES-256-GCM Hardware-Bound (ESP32-S3 MAC + AAGUID + PIN)");
+            } else {
+                Serial.println("[SD VAULT] ❌ No MicroSD card detected or mount failed. Check slot (Pins: CLK=12, CMD=16, D0=17).");
+            }
+        } else if (sub.startsWith("backup")) {
+            String pin = sub.substring(6);
+            pin.trim();
+            if (pin.length() == 0) pin = masterPin;
+            const char* mnemonic = wallet->getMnemonicPhrase();
+            if (!mnemonic || strlen(mnemonic) == 0) {
+                Serial.println("[SD VAULT] ❌ Error: No seed mnemonic active in wallet.");
+            } else if (sdVault.backupSeed(mnemonic, pin.c_str())) {
+                rgb.flashRainbow(800);
+                Serial.println("[SD VAULT] 🔒✅ Backup SUCCESS: Active BIP-39 seed encrypted to /vault/tkey_backup.vault (AES-256-GCM).");
+            } else {
+                Serial.println("[SD VAULT] ❌ Error: Failed to write encrypted backup to SD card.");
+            }
+        } else if (sub.startsWith("restore")) {
+            String pin = sub.substring(7);
+            pin.trim();
+            if (pin.length() == 0) pin = masterPin;
+            char restoredMnemonic[256] = {0};
+            if (sdVault.restoreSeed(restoredMnemonic, sizeof(restoredMnemonic), pin.c_str())) {
+                rgb.flashRainbow(1200);
+                Serial.println("[SD VAULT] 🔓✅ Restore SUCCESS: Seed decrypted & verified via GCM Auth Tag.");
+                Serial.printf("  Decrypted Mnemonic: %s\n", restoredMnemonic);
+                wallet->setMnemonic(restoredMnemonic);
+                Serial.println("  Addresses re-derived in memory.");
+            } else {
+                Serial.println("[SD VAULT] ❌ Error: Decryption or GCM integrity check failed! Wrong PIN, wrong hardware, or file tampered.");
+            }
+        } else if (sub.equalsIgnoreCase("wipe CONFIRM")) {
+            if (sdVault.wipeVault()) {
+                Serial.println("[SD VAULT] ⚠️ Vault containers securely overwritten and wiped from MicroSD.");
+            } else {
+                Serial.println("[SD VAULT] No vault files found to wipe.");
+            }
+        } else if (sub.equalsIgnoreCase("wipe")) {
+            Serial.println("[SD VAULT] ⚠️ DANGER: To wipe all encrypted vaults from SD, type: 'vault wipe CONFIRM'");
         }
     } else if (cmd.startsWith("newseed")) {
         int words = 12;

@@ -81,6 +81,14 @@ void CryptoWallet::generateNewMnemonic() {
     deriveAllAccounts();
 }
 
+bool CryptoWallet::setMnemonic(const char* phrase) {
+    if (!phrase || strlen(phrase) == 0 || strlen(phrase) >= sizeof(_mnemonic)) return false;
+    strncpy(_mnemonic, phrase, sizeof(_mnemonic) - 1);
+    _mnemonic[sizeof(_mnemonic) - 1] = '\0';
+    deriveAllAccounts();
+    return true;
+}
+
 const WalletAccount* CryptoWallet::getAccount(CryptoCoin coin) const {
     if (coin < COIN_COUNT) return &_accounts[coin];
     return nullptr;

@@ -18,10 +18,13 @@
 #define PIN_BTN           0       // BOOT button (active LOW, internal pullup)
 #define LED_COUNT         1       // Single onboard RGB LED
 
-// ─── MicroSD (SDIO 1-Bit SD_MMC) ─────────────────────────────────────────────
+// ─── MicroSD (SDIO SD_MMC Official LilyGO T-Dongle S3 Pinout) ───────────────
 #define PIN_SD_CLK        12      // SD_MMC CLK
 #define PIN_SD_CMD        16      // SD_MMC CMD
-#define PIN_SD_D0         17      // SD_MMC D0
+#define PIN_SD_D0         14      // SD_MMC D0 (Data 0)
+#define PIN_SD_D1         17      // SD_MMC D1 (Data 1)
+#define PIN_SD_D2         21      // SD_MMC D2 (Data 2)
+#define PIN_SD_D3         18      // SD_MMC D3 (Data 3)
 
 // ─── Display Configuration (lilygo-tdongle-ui-dev standard) ──────────────────
 #define DISP_W            160

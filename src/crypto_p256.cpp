@@ -147,6 +147,11 @@ bool CryptoP256::verifyCredentialIdRaw(const uint8_t* rpHash32, const uint8_t* c
     return true;
 }
 
+static int f_rng(void* p_rng, unsigned char* output, size_t output_len) {
+    esp_fill_random(output, output_len);
+    return 0;
+}
+
 bool CryptoP256::generateKeypair(uint8_t* privKeyOut, uint8_t* pubKeyOutRaw) {
     mbedtls_ecp_group grp;
     mbedtls_ecp_point Q;
@@ -158,8 +163,12 @@ bool CryptoP256::generateKeypair(uint8_t* privKeyOut, uint8_t* pubKeyOutRaw) {
 
     mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1);
     mbedtls_mpi_read_binary(&d, privKeyOut, 32);
+    mbedtls_mpi_mod_mpi(&d, &d, &grp.N);
+    if (mbedtls_mpi_cmp_int(&d, 0) == 0) {
+        mbedtls_mpi_lset(&d, 1);
+    }
 
-    int ret = mbedtls_ecp_mul(&grp, &Q, &d, &grp.G, NULL, NULL);
+    int ret = mbedtls_ecp_mul(&grp, &Q, &d, &grp.G, f_rng, NULL);
     if (ret != 0) {
         mbedtls_ecp_group_free(&grp);
         mbedtls_ecp_point_free(&Q);
@@ -184,11 +193,6 @@ bool CryptoP256::generateKeypair(uint8_t* privKeyOut, uint8_t* pubKeyOutRaw) {
     mbedtls_ecp_point_free(&Q);
     mbedtls_mpi_free(&d);
     return true;
-}
-
-static int f_rng(void* p_rng, unsigned char* output, size_t output_len) {
-    esp_fill_random(output, output_len);
-    return 0;
 }
 
 bool CryptoP256::signDigest(const uint8_t* privKey, const uint8_t* digest, uint8_t* sigOutDer, size_t* sigLen) {
@@ -288,6 +292,10 @@ bool CryptoP256::computeSharedSecretP256(const uint8_t* privKey32, const uint8_t
 
     mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1);
     mbedtls_mpi_read_binary(&d, privKey32, 32);
+    mbedtls_mpi_mod_mpi(&d, &d, &grp.N);
+    if (mbedtls_mpi_cmp_int(&d, 0) == 0) {
+        mbedtls_mpi_lset(&d, 1);
+    }
 
     uint8_t uncompressed[65];
     uncompressed[0] = 0x04;
@@ -301,7 +309,7 @@ bool CryptoP256::computeSharedSecretP256(const uint8_t* privKey32, const uint8_t
         return false;
     }
 
-    ret = mbedtls_ecp_mul(&grp, &P, &d, &Qpeer, NULL, NULL);
+    ret = mbedtls_ecp_mul(&grp, &P, &d, &Qpeer, f_rng, NULL);
     if (ret != 0 || mbedtls_ecp_is_zero(&P)) {
         mbedtls_ecp_group_free(&grp);
         mbedtls_ecp_point_free(&Qpeer);

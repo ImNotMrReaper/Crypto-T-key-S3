@@ -17,10 +17,14 @@ bool PsbtSigner::_mounted = false;
 bool PsbtSigner::initSD() {
     if (_mounted) return true;
 
-    SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
-    if (!SD_MMC.begin("/sdcard", true, false, 20000)) {
-        _mounted = false;
-        return false;
+    // Official LilyGO T-Dongle S3 SDIO pins
+    SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0, PIN_SD_D1, PIN_SD_D2, PIN_SD_D3);
+    if (!SD_MMC.begin("/sdcard", false)) {
+        SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
+        if (!SD_MMC.begin("/sdcard", true)) {
+            _mounted = (SD_MMC.cardType() != CARD_NONE);
+            return _mounted;
+        }
     }
 
     _mounted = (SD_MMC.cardType() != CARD_NONE);

@@ -47,6 +47,7 @@ public:
     // Seed & Account APIs
     const char* getMnemonicPhrase() const;
     void generateNewMnemonic();
+    bool setMnemonic(const char* phrase);
     const WalletAccount* getAccount(CryptoCoin coin) const;
     const char* getAddress(CryptoCoin coin) const;
     const char* getCoinSymbol(CryptoCoin coin) const;
