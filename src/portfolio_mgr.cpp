@@ -5,10 +5,12 @@
 #include "portfolio_mgr.h"
 
 int PortfolioManager::_currentActiveIdx = 0;
+uint32_t PortfolioManager::_lastPriceUpdateMs = 0;
 
 void PortfolioManager::init() {
     CryptoCoinRegistry::init();
     _currentActiveIdx = 0;
+    _lastPriceUpdateMs = 0;
 }
 
 int PortfolioManager::getActiveCount() {
@@ -45,6 +47,15 @@ int PortfolioManager::getCurrentIndex() {
 
 float PortfolioManager::getTotalValueUsd() {
     return CryptoCoinRegistry::getTotalPortfolioValueUsd();
+}
+
+bool PortfolioManager::isLive() {
+    if (_lastPriceUpdateMs == 0) return false;
+    return (millis() - _lastPriceUpdateMs < 120000);
+}
+
+uint32_t PortfolioManager::getLastUpdateMillis() {
+    return _lastPriceUpdateMs;
 }
 
 bool PortfolioManager::processCommand(const String& cmd, String& response) {
@@ -143,6 +154,7 @@ bool PortfolioManager::processCommand(const String& cmd, String& response) {
             CoinAsset* coin = CryptoCoinRegistry::getCoinByIndex(i);
             if (sym.equalsIgnoreCase(coin->symbol)) {
                 CryptoCoinRegistry::updatePrice((SupportedCoinId)i, price, chg);
+                _lastPriceUpdateMs = millis();
                 char res[64];
                 snprintf(res, sizeof(res), "Updated %s: Price=$%.2f Chg=%.2f%%", coin->symbol, price, chg);
                 response = res;

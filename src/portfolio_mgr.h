@@ -20,10 +20,13 @@ public:
     static CoinAsset* getCurrentCoin();
     static int  getCurrentIndex();
     static float getTotalValueUsd();
+    static bool  isLive(); // Returns true if telemetry received within last 120s
+    static uint32_t getLastUpdateMillis();
 
     // Command processing for USB Bridge & Serial
     static bool processCommand(const String& cmd, String& response);
 
 private:
     static int _currentActiveIdx;
+    static uint32_t _lastPriceUpdateMs;
 };

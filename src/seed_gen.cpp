@@ -86,8 +86,9 @@ bool SeedGenerator::generateMnemonic12Words(char* outMnemonic, size_t maxLen) {
     uint8_t cs = hash[0] >> 4; // 4 bits
 
     // 3. Assemble 132 bits into 12 11-bit indices
-    // Buffer with 17 bytes (128 bits + 8 bits)
-    uint8_t bits[17];
+    // Buffer with 18 bytes (padded with 0 to safely allow byteIdx + 2 read)
+    uint8_t bits[18];
+    memset(bits, 0, sizeof(bits));
     memcpy(bits, ent, 16);
     bits[16] = hash[0];
 
@@ -129,7 +130,9 @@ bool SeedGenerator::generateMnemonic24Words(char* outMnemonic, size_t maxLen) {
     uint8_t cs = hash[0]; // 8 bits
 
     // 3. Assemble 264 bits into 24 11-bit indices
-    uint8_t bits[33];
+    // Buffer with 35 bytes (padded with 0 to safely allow byteIdx + 2 read)
+    uint8_t bits[35];
+    memset(bits, 0, sizeof(bits));
     memcpy(bits, ent, 32);
     bits[32] = cs;
 

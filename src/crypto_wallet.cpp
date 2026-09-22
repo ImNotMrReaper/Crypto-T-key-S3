@@ -3,6 +3,7 @@
  */
 
 #include "crypto_wallet.h"
+#include "seed_gen.h"
 #include <uECC.h>
 #include <SHA256.h>
 #include <SHA3.h>
@@ -73,12 +74,13 @@ const char* CryptoWallet::getMnemonicPhrase() const {
 }
 
 void CryptoWallet::generateNewMnemonic() {
-    // Generate new random mnemonic based on hardware TRNG
-    uint8_t entropy[16];
-    esp_fill_random(entropy, sizeof(entropy));
-
-    // For demonstration of multi-currency keys, regenerate root accounts
-    deriveAllAccounts();
+    // Generate new verifiable 12-word BIP-39 mnemonic via hardware TRNG
+    char phrase[240] = {0};
+    SeedGenerator::resetEntropy();
+    if (SeedGenerator::generateMnemonic12Words(phrase, sizeof(phrase))) {
+        setMnemonic(phrase);
+    }
+    secureZero(phrase, sizeof(phrase));
 }
 
 bool CryptoWallet::setMnemonic(const char* phrase) {

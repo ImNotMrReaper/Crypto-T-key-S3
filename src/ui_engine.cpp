@@ -378,7 +378,7 @@ void UiEngine::renderWalletScreen(const char* coinName, const char* symbol, cons
     _sprite->pushSprite(0, 0);
 }
 
-void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float balance, float priceUsd, float change24h, int activeIdx, int totalActive, float totalPortfolioUsd) {
+void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float balance, float priceUsd, float change24h, int activeIdx, int totalActive, float totalPortfolioUsd, bool isLive) {
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
@@ -389,9 +389,9 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
     else if (strstr(symbol, "DOGE")) coinColor = 0xFE00;
     else if (strstr(symbol, "PEPE")) coinColor = 0x2DE4;
 
-    char hdr[32];
-    snprintf(hdr, sizeof(hdr), "%s (%d/%d) // TRACKER", symbol, activeIdx + 1, totalActive);
-    drawHeader(hdr, 0x0008, coinColor);
+    char hdr[36];
+    snprintf(hdr, sizeof(hdr), "%s (%d/%d) %s", symbol, activeIdx + 1, totalActive, isLive ? "[LIVE]" : "[AIRGAP]");
+    drawHeader(hdr, 0x0008, isLive ? COLOR_SIGNAL_GREEN : coinColor);
 
     // Primary Content Zone (Y: 14..65)
     _sprite->setTextDatum(TL_DATUM);

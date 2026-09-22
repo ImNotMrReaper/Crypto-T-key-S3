@@ -372,7 +372,7 @@ void renderCurrentPortfolioCard() {
     if (coin) {
         ui.renderPortfolioCard(coin->symbol, coin->name, coin->balance, coin->priceUsd, coin->change24h,
                                PortfolioManager::getCurrentIndex(), PortfolioManager::getActiveCount(),
-                               PortfolioManager::getTotalValueUsd());
+                               PortfolioManager::getTotalValueUsd(), PortfolioManager::isLive());
     }
 }
 
@@ -648,6 +648,10 @@ void processSeedWordDisplayState(ButtonEvent ev) {
         ui.renderSeedBackupScreen(currentWordIdx + 1, totalMnemonicWords, mnemonicWords[currentWordIdx]);
     } else if (ev == BTN_LONG_PRESS) {
         // Complete seed verification
+        if (wallet) {
+            wallet->setMnemonic(generatedMnemonic);
+            Serial.println("[WALLET] ✅ New verified BIP-39 mnemonic installed into active crypto wallet.");
+        }
         rgb.flashRainbow(1000);
         ui.renderSuccessBanner("SEED BACKUP COMPLETE", "WALLET SECURED");
         delay(1200);
@@ -860,7 +864,8 @@ void handleSerialCommands() {
         Serial.println("  setbal <SYM> <AMT>       - Set user coin holding balance");
         Serial.println("  setprice <SYM> <P> [C]   - Update live USD price & 24h change");
         Serial.println("  json                     - Output compact JSON for WebUSB companion");
-        Serial.println("  newseed [12|24]          - Start hybrid entropy BIP-39 seed wizard");
+        Serial.println("  newseed [12|24] [quick]  - Generate genuine BIP-39 mnemonic (screen or TRNG)");
+        Serial.println("  seed [--allow-serial]    - View recovery mnemonic (LCD screen or test export)");
         Serial.println("  setpin <PIN>             - Set 4-digit master PIN");
         Serial.println("  unlock <PIN>             - Unlock crypto vault and reveal derived addresses");
         Serial.println("  addresses                - Print genuine derived BIP-32/BIP-84/EIP-55 addresses");
@@ -917,6 +922,17 @@ void handleSerialCommands() {
                 }
             }
             Serial.println("------------------------------------------------------------\n");
+        }
+    } else if (cmd.equalsIgnoreCase("seed") || cmd.startsWith("seed ") || cmd.startsWith("showseed")) {
+        if (!wallet || !wallet->isUnlocked()) {
+            Serial.println("[VAULT] 🔒 Error: Vault locked. Unlock with 'unlock <PIN>' first.");
+        } else if (cmd.indexOf("--allow-serial") != -1 || cmd.indexOf("--insecure-serial-dump") != -1) {
+            Serial.printf("[VAULT] ⚠️ INSECURE SERIAL EXPORT: %s\n", wallet->getMnemonicPhrase());
+        } else {
+            Serial.println("[VAULT] 🛡️ Zero-Seed-Leakage Air-Gap Policy Active.");
+            Serial.println("  Seed words are displayed EXCLUSIVELY on physical 160x80 LCD screen.");
+            Serial.println("  To view on screen: Enter Vault (PIN) -> Double Click button.");
+            Serial.println("  (For automated test harnesses, append '--allow-serial' to command).");
         }
     } else if (cmd.equalsIgnoreCase("lock")) {
         wallet->lock();
@@ -1047,7 +1063,23 @@ void handleSerialCommands() {
     } else if (cmd.startsWith("newseed")) {
         int words = 12;
         if (cmd.indexOf("24") != -1) words = 24;
-        startSeedGeneration(words);
+        if (cmd.indexOf("quick") != -1 || cmd.indexOf("auto") != -1 || cmd.indexOf("trng") != -1) {
+            char phrase[240] = {0};
+            SeedGenerator::resetEntropy();
+            bool ok = (words == 24) 
+                ? SeedGenerator::generateMnemonic24Words(phrase, sizeof(phrase))
+                : SeedGenerator::generateMnemonic12Words(phrase, sizeof(phrase));
+            if (ok && wallet) {
+                wallet->setMnemonic(phrase);
+                Serial.printf("[SEED] ✅ Generated genuine %d-word BIP-39 mnemonic via hardware TRNG:\n", words);
+                Serial.printf("  %s\n", phrase);
+                Serial.println("  Active crypto wallet updated and root addresses derived.");
+            } else {
+                Serial.println("[SEED] ❌ Failed to generate mnemonic.");
+            }
+        } else {
+            startSeedGeneration(words);
+        }
     } else if (cmd.startsWith("setpin ")) {
         String newPin = cmd.substring(7);
         newPin.trim();

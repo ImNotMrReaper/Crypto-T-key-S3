@@ -228,12 +228,17 @@ def sync_cycle(port):
         for sym, cg_id in COINGECKO_MAP.items():
             if sym in synced_coins:
                 continue
-            if cg_id in prices:
-                p_usd = prices[cg_id].get("usd", 0.0)
-                chg = prices[cg_id].get("usd_24h_change", 0.0)
-                cmd = f"setprice {sym} {p_usd:.8f} {chg:.2f}\n"
+            coin_data = prices.get(cg_id)
+            if coin_data is None:
+                continue
+            p_usd = coin_data.get("usd") or 0.0
+            chg = coin_data.get("usd_24h_change") or 0.0
+            try:
+                cmd = f"setprice {sym} {float(p_usd):.8f} {float(chg):.2f}\n"
                 ser.write(cmd.encode())
-                time.sleep(0.04)
+            except (TypeError, ValueError) as e:
+                print(f"[TRACKER] ⚠️ Skipping {sym}: bad price data ({e})", file=sys.stderr)
+            time.sleep(0.04)
         print(f"[TRACKER] ✅ Updated full asset registry.")
 
     # 3. Query derived deposit addresses & check on-chain balances
@@ -241,20 +246,29 @@ def sync_cycle(port):
     if addrs:
         print(f"[TRACKER] 🔍 Derived addresses found on key: {list(addrs.keys())}")
         if "BTC" in addrs:
-            btc_bal = fetch_btc_balance(addrs["BTC"])
-            ser.write(f"setbal BTC {btc_bal:.8f}\n".encode())
-            print(f"[TRACKER] ₿ Bitcoin On-Chain Balance: {btc_bal:.8f} BTC ({addrs['BTC']})")
+            btc_bal = fetch_btc_balance(addrs["BTC"]) or 0.0
+            try:
+                ser.write(f"setbal BTC {btc_bal:.8f}\n".encode())
+                print(f"[TRACKER] ₿ Bitcoin On-Chain Balance: {btc_bal:.8f} BTC ({addrs['BTC']})")
+            except (TypeError, ValueError):
+                print(f"[TRACKER] ⚠️ Skipping BTC balance update.", file=sys.stderr)
             time.sleep(0.05)
         if "ETH" in addrs:
-            eth_bal = fetch_eth_balance(addrs["ETH"])
-            ser.write(f"setbal ETH {eth_bal:.6f}\n".encode())
-            print(f"[TRACKER] ⟠ Ethereum On-Chain Balance: {eth_bal:.6f} ETH ({addrs['ETH']})")
+            eth_bal = fetch_eth_balance(addrs["ETH"]) or 0.0
+            try:
+                ser.write(f"setbal ETH {eth_bal:.6f}\n".encode())
+                print(f"[TRACKER] ⟠ Ethereum On-Chain Balance: {eth_bal:.6f} ETH ({addrs['ETH']})")
+            except (TypeError, ValueError):
+                print(f"[TRACKER] ⚠️ Skipping ETH balance update.", file=sys.stderr)
             time.sleep(0.05)
 
             # Auto-track PEPE ERC-20 token on same EVM account!
-            pepe_bal = fetch_pepe_balance(addrs["ETH"])
-            ser.write(f"setbal PEPE {pepe_bal:.2f}\n".encode())
-            print(f"[TRACKER] 🐸 PEPE On-Chain Balance: {pepe_bal:,.2f} PEPE")
+            pepe_bal = fetch_pepe_balance(addrs["ETH"]) or 0.0
+            try:
+                ser.write(f"setbal PEPE {pepe_bal:.2f}\n".encode())
+                print(f"[TRACKER] 🐸 PEPE On-Chain Balance: {pepe_bal:,.2f} PEPE")
+            except (TypeError, ValueError):
+                print(f"[TRACKER] ⚠️ Skipping PEPE balance update.", file=sys.stderr)
             time.sleep(0.05)
 
     ser.close()

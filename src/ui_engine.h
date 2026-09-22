@@ -24,7 +24,7 @@ public:
     void renderFidoPrompt(const char* rpId, float progress0to1 = 1.0f);
     void renderCryptoSignPrompt(const char* chain, const char* recipient, const char* amount);
     void renderWalletScreen(const char* coinName, const char* symbol, const char* address, const char* path);
-    void renderPortfolioCard(const char* symbol, const char* name, float balance, float priceUsd, float change24h, int activeIdx, int totalActive, float totalPortfolioUsd);
+    void renderPortfolioCard(const char* symbol, const char* name, float balance, float priceUsd, float change24h, int activeIdx, int totalActive, float totalPortfolioUsd, bool isLive = false);
     void renderSeedBackupScreen(int wordNum, int totalWords, const char* word);
     void renderSeedWordsView(int wordNum, int totalWords, const char* word);
     void renderEntropyGatherScreen(int currentSamples, int requiredSamples);
