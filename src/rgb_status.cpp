@@ -79,16 +79,55 @@ RgbColor RgbStatus::wheel(uint8_t wheelPos) {
 }
 
 RgbColor RgbStatus::getCoinRgb(const char* symbol) {
-    if (!symbol) return { 0, 229, 255 }; // Cyan default
-    if (strcmp(symbol, "BTC") == 0)  return { 255, 140, 0 };   // Bitcoin Gold/Orange
-    if (strcmp(symbol, "ETH") == 0)  return { 138, 75, 255 };  // Ethereum Royal Violet
-    if (strcmp(symbol, "SOL") == 0)  return { 20, 241, 149 };  // Solana Neon Turquoise
-    if (strcmp(symbol, "DOGE") == 0) return { 255, 195, 15 };  // Doge Sunny Gold
-    if (strcmp(symbol, "XMR") == 0)  return { 255, 80, 0 };    // Monero Flame Orange
-    if (strcmp(symbol, "ADA") == 0)  return { 0, 90, 255 };    // Cardano Deep Blue
-    if (strcmp(symbol, "XRP") == 0)  return { 0, 210, 255 };   // Ripple Ice Cyan
-    if (strcmp(symbol, "USDT") == 0) return { 38, 161, 123 };  // Tether Mint Green
-    return { 0, 229, 255 };
+    if (!symbol) return { 0, 229, 255 };
+    // ── CRYPTO ────────────────────────────────────────────────────────────────
+    // Each entry is the closest true brand hex, unique across all 44 coins
+    if (strcmp(symbol, "BTC")    == 0) return { 247, 147,  26 }; // #F7931A Bitcoin Orange
+    if (strcmp(symbol, "ETH")    == 0) return {  98, 126, 234 }; // #627EEA Ethereum Indigo
+    if (strcmp(symbol, "SOL")    == 0) return {  20, 241, 149 }; // #14F195 Solana Green-Teal
+    if (strcmp(symbol, "BNB")    == 0) return { 243, 186,  47 }; // #F3BA2F BNB Gold
+    if (strcmp(symbol, "XRP")    == 0) return {   0, 136, 255 }; // #0088FF XRP Blue
+    if (strcmp(symbol, "ADA")    == 0) return {   0,  51, 173 }; // #0033AD Cardano Cobalt
+    if (strcmp(symbol, "AVAX")   == 0) return { 232,  65,  66 }; // #E84142 Avalanche Red
+    if (strcmp(symbol, "DOT")    == 0) return { 230,   0, 122 }; // #E6007A Polkadot Pink
+    if (strcmp(symbol, "LINK")   == 0) return {  43, 110, 245 }; // #2B6EF5 Chainlink Blue
+    if (strcmp(symbol, "LTC")    == 0) return { 191, 191, 191 }; // #BFBFBF Litecoin Silver
+    if (strcmp(symbol, "BCH")    == 0) return {   0, 168,  77 }; // #00A84D Bitcoin Cash Green
+    if (strcmp(symbol, "ATOM")   == 0) return {  99,  88, 199 }; // #6358C7 Cosmos Purple
+    if (strcmp(symbol, "POL")    == 0) return { 130,  71, 229 }; // #8247E5 Polygon Violet
+    if (strcmp(symbol, "TRX")    == 0) return { 220,  20,  20 }; // #DC1414 TRON Red
+    if (strcmp(symbol, "NEAR")   == 0) return {   0, 194, 204 }; // #00C2CC NEAR Teal
+    if (strcmp(symbol, "SUI")    == 0) return {  46, 176, 228 }; // #2EB0E4 Sui Sky Blue
+    if (strcmp(symbol, "APT")    == 0) return {   0, 191, 165 }; // #00BFA5 Aptos Mint
+    if (strcmp(symbol, "TON")    == 0) return {   0, 136, 204 }; // #0088CC TON Blue
+    if (strcmp(symbol, "XLM")    == 0) return {  14, 182, 236 }; // #0EB6EC Stellar Blue
+    if (strcmp(symbol, "ALGO")   == 0) return { 100, 180, 160 }; // #64B4A0 Algorand Sage
+    if (strcmp(symbol, "HBAR")   == 0) return {   0, 163, 174 }; // #00A3AE Hedera Teal
+    if (strcmp(symbol, "VET")    == 0) return {  32, 201, 250 }; // #20C9FA VeChain Aqua
+    if (strcmp(symbol, "FIL")    == 0) return {   0,  84, 255 }; // #0054FF Filecoin Blue
+    if (strcmp(symbol, "ICP")    == 0) return { 150, 110, 229 }; // #966EE5 ICP Mid-Gradient
+    if (strcmp(symbol, "TAO")    == 0) return { 128, 128, 128 }; // #808080 Bittensor Gray
+    if (strcmp(symbol, "INJ")    == 0) return {   0, 148, 255 }; // #0094FF Injective Blue
+    if (strcmp(symbol, "ARB")    == 0) return {  18, 120, 214 }; // #1278D6 Arbitrum Blue
+    if (strcmp(symbol, "OP")     == 0) return { 255,   4,  32 }; // #FF0420 Optimism Red
+    if (strcmp(symbol, "KAS")    == 0) return { 112, 221, 176 }; // #70DDB0 Kaspa Teal
+    if (strcmp(symbol, "XMR")    == 0) return { 255, 102,   0 }; // #FF6600 Monero Orange
+    if (strcmp(symbol, "EGLD")   == 0) return {  35, 162, 255 }; // #23A2FF MultiversX Blue
+    if (strcmp(symbol, "UNI")    == 0) return { 255,   0, 122 }; // #FF007A Uniswap Pink
+    // ── MEME COINS ────────────────────────────────────────────────────────────
+    if (strcmp(symbol, "DOGE")   == 0) return { 255, 189,  35 }; // #FFBD23 Dogecoin Gold
+    if (strcmp(symbol, "SHIB")   == 0) return { 255,  90,   0 }; // #FF5A00 Shiba Amber
+    if (strcmp(symbol, "PEPE")   == 0) return {   0, 200,  50 }; // #00C832 Pepe Green
+    if (strcmp(symbol, "BONK")   == 0) return { 255, 180,   0 }; // #FFB400 Bonk Yellow
+    if (strcmp(symbol, "FLOKI")  == 0) return { 255, 164,   0 }; // #FFA400 Floki Gold
+    if (strcmp(symbol, "WIF")    == 0) return { 180, 100,  60 }; // #B4643C dogwifhat Peach
+    if (strcmp(symbol, "BRETT")  == 0) return {  66, 135, 245 }; // #4287F5 Brett Blue
+    if (strcmp(symbol, "MOG")    == 0) return { 160,  40, 220 }; // #A028DC Mog Violet
+    if (strcmp(symbol, "TURBO")  == 0) return { 240,  70,   0 }; // #F04600 Turbo Orange-Red
+    if (strcmp(symbol, "POPCAT") == 0) return { 255, 150, 180 }; // #FF96B4 Popcat Pink
+    if (strcmp(symbol, "NEIRO")  == 0) return { 255, 220, 170 }; // #FFDCAA Neiro Cream
+    if (strcmp(symbol, "GOAT")   == 0) return { 100, 200, 100 }; // #64C864 Goat Sage Green
+    return { 0, 229, 255 }; // Cyan fallback
 }
 
 void RgbStatus::setCoinColor(uint8_t r, uint8_t g, uint8_t b) {

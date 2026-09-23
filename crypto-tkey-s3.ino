@@ -65,6 +65,7 @@ int           pinIndex = 0;
 int           currentDigitVal = 0;
 uint8_t       lastHoldStage = 0;
 uint32_t      lastStateUpdate = 0;
+uint32_t      lastTickerRefreshMs = 0;   // 1s live ticker auto-refresh
 CryptoCoin    currentViewCoin = COIN_BTC;
 bool          s_simulatedTouch = false;
 
@@ -247,6 +248,14 @@ void loop() {
 
     handleSerialCommands();
 
+    // ── 1-Second Live Ticker Auto-Refresh ────────────────────────────────────
+    if (deviceState == STATE_PORTFOLIO_TRACKER &&
+        !PowerManager::isDisplaySleeping() &&
+        millis() - lastTickerRefreshMs >= 1000) {
+        renderCurrentPortfolioCard();
+        lastTickerRefreshMs = millis();
+    }
+
     switch (deviceState) {
         case STATE_SETUP_WALKTHROUGH:
             // ── MANDATORY SETUP — CANNOT BE SKIPPED OR BYPASSED ──────────────
@@ -374,6 +383,10 @@ void processPasskeyHubState(ButtonEvent ev) {
 void renderCurrentPortfolioCard() {
     CoinAsset* coin = PortfolioManager::getCurrentCoin();
     if (coin) {
+        // ── Always sync LED to active coin brand color ─────────────────
+        RgbColor c = RgbStatus::getCoinRgb(coin->symbol);
+        rgb.setCoinColor(c.r, c.g, c.b);
+
         ui.renderPortfolioCard(coin->symbol, coin->name, coin->balance, coin->priceUsd, coin->change24h,
                                PortfolioManager::getCurrentIndex(), PortfolioManager::getActiveCount(),
                                PortfolioManager::getTotalValueUsd(), PortfolioManager::isLive());
@@ -854,6 +867,7 @@ void handleSerialCommands() {
     String res;
     if (PortfolioManager::processCommand(cmd, res)) {
         Serial.println(res);
+        lastTickerRefreshMs = millis();
         renderCurrentPortfolioCard();
         return;
     }

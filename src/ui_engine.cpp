@@ -9,6 +9,12 @@
  */
 
 #include "ui_engine.h"
+#include "rgb_status.h"
+
+uint16_t getCoinColor565(const char* symbol) {
+    RgbColor c = RgbStatus::getCoinRgb(symbol);
+    return ((uint16_t)(c.r >> 3) << 11) | ((uint16_t)(c.g >> 2) << 5) | (uint16_t)(c.b >> 3);
+}
 
 void UiEngine::begin(TFT_eSPI* tft) {
     _tft = tft;
@@ -329,13 +335,8 @@ void UiEngine::renderWalletScreen(const char* coinName, const char* symbol, cons
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
-    // Determine coin branding color
-    uint16_t coinColor = COLOR_NEON_CYAN;
-    if (strstr(symbol, "BTC")) coinColor = COLOR_CYBER_GOLD;
-    else if (strstr(symbol, "ETH")) coinColor = 0x9B1F;
-    else if (strstr(symbol, "SOL")) coinColor = 0x17EE;
-    else if (strstr(symbol, "DOGE")) coinColor = 0xFE00;
-    else if (strstr(symbol, "PEPE")) coinColor = 0x2DE4; // Vibrant Pepe Green
+    // Determine coin branding color (matching master brand palette)
+    uint16_t coinColor = getCoinColor565(symbol);
 
     drawHeader(coinName, 0x0008, coinColor);
 
@@ -382,54 +383,8 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
-    // ── Brand Colors: unique per coin, carefully differentiated ──────────────
-    uint16_t coinColor = COLOR_NEON_CYAN;
-    // ── CRYPTO ────────────────────────────────────────────────────────────────
-    if      (strcmp(symbol, "BTC")    == 0) coinColor = 0xFCC0;  // Bitcoin Orange
-    else if (strcmp(symbol, "ETH")    == 0) coinColor = 0x9A5F;  // Ethereum Indigo-purple
-    else if (strcmp(symbol, "SOL")    == 0) coinColor = 0x17E8;  // Solana vivid teal
-    else if (strcmp(symbol, "BNB")    == 0) coinColor = 0xF720;  // BNB rich gold
-    else if (strcmp(symbol, "XRP")    == 0) coinColor = 0x041F;  // XRP electric blue
-    else if (strcmp(symbol, "ADA")    == 0) coinColor = 0x035F;  // Cardano cobalt
-    else if (strcmp(symbol, "AVAX")   == 0) coinColor = 0xF800;  // Avalanche red
-    else if (strcmp(symbol, "DOT")    == 0) coinColor = 0xE81F;  // Polkadot magenta-pink
-    else if (strcmp(symbol, "LINK")   == 0) coinColor = 0x215F;  // Chainlink medium blue
-    else if (strcmp(symbol, "LTC")    == 0) coinColor = 0xC618;  // Litecoin silver-gray
-    else if (strcmp(symbol, "BCH")    == 0) coinColor = 0x07C0;  // Bitcoin Cash vivid green
-    else if (strcmp(symbol, "ATOM")   == 0) coinColor = 0x6B5D;  // Cosmos slate-purple
-    else if (strcmp(symbol, "POL")    == 0) coinColor = 0x8010;  // Polygon violet
-    else if (strcmp(symbol, "TRX")    == 0) coinColor = 0xF820;  // TRON red-orange
-    else if (strcmp(symbol, "NEAR")   == 0) coinColor = 0xFFFF;  // NEAR white
-    else if (strcmp(symbol, "SUI")    == 0) coinColor = 0x047F;  // Sui cerulean
-    else if (strcmp(symbol, "APT")    == 0) coinColor = 0x25FF;  // Aptos mint
-    else if (strcmp(symbol, "TON")    == 0) coinColor = 0x049F;  // TON sky blue
-    else if (strcmp(symbol, "XLM")    == 0) coinColor = 0xCF5F;  // Stellar light steel blue
-    else if (strcmp(symbol, "ALGO")   == 0) coinColor = 0xEF5D;  // Algorand warm off-white
-    else if (strcmp(symbol, "HBAR")   == 0) coinColor = 0x2C9F;  // Hedera teal-blue
-    else if (strcmp(symbol, "VET")    == 0) coinColor = 0x439F;  // VeChain aqua blue
-    else if (strcmp(symbol, "FIL")    == 0) coinColor = 0x0ABF;  // Filecoin blue
-    else if (strcmp(symbol, "ICP")    == 0) coinColor = 0xF81F;  // ICP hot pink
-    else if (strcmp(symbol, "TAO")    == 0) coinColor = 0xA514;  // Bittensor medium gray
-    else if (strcmp(symbol, "INJ")    == 0) coinColor = 0x009F;  // Injective inject-blue
-    else if (strcmp(symbol, "ARB")    == 0) coinColor = 0x065F;  // Arbitrum arb-blue
-    else if (strcmp(symbol, "OP")     == 0) coinColor = 0xF80C;  // Optimism OP rose-red
-    else if (strcmp(symbol, "KAS")    == 0) coinColor = 0x07F9;  // Kaspa teal
-    else if (strcmp(symbol, "XMR")    == 0) coinColor = 0xF400;  // Monero orange
-    else if (strcmp(symbol, "EGLD")   == 0) coinColor = 0x2FFF;  // MultiversX bright-cyan
-    else if (strcmp(symbol, "UNI")    == 0) coinColor = 0xF01E;  // Uniswap pink
-    // ── MEME COINS ────────────────────────────────────────────────────────────
-    else if (strcmp(symbol, "DOGE")   == 0) coinColor = 0xFEA0;  // Dogecoin DOGE gold
-    else if (strcmp(symbol, "SHIB")   == 0) coinColor = 0xFB40;  // Shiba deep amber
-    else if (strcmp(symbol, "PEPE")   == 0) coinColor = 0x2DC4;  // Pepe vivid frog green
-    else if (strcmp(symbol, "BONK")   == 0) coinColor = 0xFCE0;  // Bonk papaya yellow
-    else if (strcmp(symbol, "FLOKI")  == 0) coinColor = 0xF6A0;  // Floki yellow
-    else if (strcmp(symbol, "WIF")    == 0) coinColor = 0xFB80;  // dogwifhat warm peach
-    else if (strcmp(symbol, "BRETT")  == 0) coinColor = 0x045F;  // Brett blue
-    else if (strcmp(symbol, "MOG")    == 0) coinColor = 0xA01F;  // Mog violet
-    else if (strcmp(symbol, "TURBO")  == 0) coinColor = 0xF7C0;  // Turbo amber
-    else if (strcmp(symbol, "POPCAT") == 0) coinColor = 0xFC5F;  // Popcat salmon-pink
-    else if (strcmp(symbol, "NEIRO")  == 0) coinColor = 0xFFE0;  // Neiro warm cream
-    else if (strcmp(symbol, "GOAT")   == 0) coinColor = 0x87E0;  // Goat sage green
+    // ── Brand Colors: exact RGB565 derived from master brand palette ─────────
+    uint16_t coinColor = getCoinColor565(symbol);
 
     // ── Category badge: [MEME] in magenta | [CRYPTO] in cyan ─────────────────
     bool isMeme = (strcmp(symbol,"DOGE")==0 || strcmp(symbol,"SHIB")==0 ||
@@ -462,22 +417,40 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
     _sprite->setTextColor(0xFFFF, COLOR_BG);
     _sprite->drawString(balStr, 8, 18, 2);
 
-    // USD Price formatting (supports micro-dollar meme coin prices like $0.0000105)
-    char priceStr[32];
-    if (priceUsd < 0.001f) {
-        snprintf(priceStr, sizeof(priceStr), "$%.7f", priceUsd);
-    } else if (priceUsd < 1.0f) {
-        snprintf(priceStr, sizeof(priceStr), "$%.4f", priceUsd);
-    } else {
+    // ── Exchange-Style Price Formatting: exact dollar-and-cents live ticker ───
+    char priceStr[24];
+    if (priceUsd >= 1000.0f) {
+        uint32_t whole = (uint32_t)priceUsd;
+        uint32_t cents = (uint32_t)((priceUsd - (float)whole) * 100.0f + 0.5f);
+        if (cents >= 100) { cents = 0; whole++; }
+        if (whole >= 1000000) {
+            snprintf(priceStr, sizeof(priceStr), "$%lu,%03lu,%03lu.%02lu",
+                     whole / 1000000, (whole / 1000) % 1000, whole % 1000, (unsigned long)cents);
+        } else {
+            snprintf(priceStr, sizeof(priceStr), "$%lu,%03lu.%02lu",
+                     whole / 1000, whole % 1000, (unsigned long)cents);
+        }
+    } else if (priceUsd >= 1.0f) {
         snprintf(priceStr, sizeof(priceStr), "$%.2f", priceUsd);
+    } else if (priceUsd >= 0.01f) {
+        snprintf(priceStr, sizeof(priceStr), "$%.4f", priceUsd);
+    } else if (priceUsd >= 0.0001f) {
+        snprintf(priceStr, sizeof(priceStr), "$%.6f", priceUsd);
+    } else if (priceUsd > 0.0f) {
+        snprintf(priceStr, sizeof(priceStr), "$%.8f", priceUsd);
+    } else {
+        snprintf(priceStr, sizeof(priceStr), "$0.00");
     }
+
+    _sprite->setTextDatum(TL_DATUM);
     _sprite->setTextColor(coinColor, COLOR_BG);
     _sprite->drawString(priceStr, 8, 36, 1);
 
     char chgStr[16];
-    snprintf(chgStr, sizeof(chgStr), "%s%.1f%%", change24h >= 0 ? "+" : "", change24h);
+    snprintf(chgStr, sizeof(chgStr), "%s%.2f%%", change24h >= 0 ? "+" : "", change24h);
+    _sprite->setTextDatum(TR_DATUM);
     _sprite->setTextColor(change24h >= 0 ? COLOR_SIGNAL_GREEN : COLOR_CRIMSON_PANIC, COLOR_BG);
-    _sprite->drawString(chgStr, 88, 36, 1);
+    _sprite->drawString(chgStr, 154, 36, 1);
 
     // Fiat valuation row
     float assetFiat = balance * priceUsd;
