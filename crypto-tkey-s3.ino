@@ -249,13 +249,17 @@ void loop() {
 
     switch (deviceState) {
         case STATE_SETUP_WALKTHROUGH:
-            if (ev == BTN_DOUBLE_CLICK) {
-                // Cancel setup portal
-                portal->stop();
-                deviceState = STATE_IDLE_READY;
-                rgb.setMode(LED_MODE_BREATHE_CYAN);
-                const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
-                ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
+            // ── MANDATORY SETUP — CANNOT BE SKIPPED OR BYPASSED ──────────────
+            // The device will not enter any operational state until first-time
+            // setup is fully completed via the captive portal at 192.168.4.1.
+            // No button combination can dismiss or bypass this requirement.
+            if (ev == BTN_LONG_PRESS) {
+                // Show mandatory reminder and return to portal screen
+                rgb.flashRainbow(400);
+                ui.renderOobeWizard(1, "SETUP REQUIRED", "Visit 192.168.4.1", "Cannot skip setup");
+                delay(2200);
+                rgb.setMode(LED_MODE_SOFTAP_PULSE);
+                ui.renderOobeWizard(1, "T-KEY SETUP", "SSID: T-Key-Setup", "GO TO: 192.168.4.1");
             }
             break;
         case STATE_IDLE_READY:
