@@ -482,10 +482,7 @@ void processPinEntryState(ButtonEvent ev) {
                 delay(1200);
 
                 deviceState = STATE_VAULT_DASHBOARD;
-                currentViewCoin = COIN_BTC;
-                rgb.setCoinColor(255, 140, 0);
-                const WalletAccount* acc = wallet->getAccount(COIN_BTC);
-                ui.renderWalletScreen("BITCOIN", "BTC (SegWit)", acc ? acc->address : "bc1q...", acc ? acc->derivationPath : "m/84'/0'/0'/0/0");
+                showVaultCoinScreen(COIN_BTC);
             } else {
                 Serial.println("[AUTH] Invalid PIN entered!");
                 ui.renderErrorBanner("Wrong PIN Code");
@@ -505,21 +502,33 @@ void processPinEntryState(ButtonEvent ev) {
     }
 }
 
+// ─── Helper: Unified Vault Coin Display with Dynamic LED & UI Theme Sync ─────
+void showVaultCoinScreen(uint8_t coin) {
+    currentViewCoin = (CryptoCoin)coin;
+    const WalletAccount* acc = wallet->getAccount(currentViewCoin);
+    const char* name = "BITCOIN";
+    const char* sym  = "BTC (SegWit)";
+    const char* lookupSym = "BTC";
+    if (coin == COIN_ETH)  { name = "ETHEREUM / PEPE"; sym = "ETH (ERC-20)"; lookupSym = "ETH"; }
+    if (coin == COIN_SOL)  { name = "SOLANA";          sym = "SOL (Ed25519)"; lookupSym = "SOL"; }
+    if (coin == COIN_DOGE) { name = "DOGECOIN";        sym = "DOGE (Legacy)"; lookupSym = "DOGE"; }
+
+    RgbColor c = RgbStatus::getCoinRgb(lookupSym);
+    rgb.setCoinColor(c.r, c.g, c.b);
+    ui.renderWalletScreen(name, sym, acc ? acc->address : "", acc ? acc->derivationPath : "");
+}
+
 // ─── State: Vault Dashboard (Private Derived Addresses Explorer) ────────────
 void processVaultDashboardState(ButtonEvent ev) {
     if (ev == BTN_SHORT_PRESS) {
         currentViewCoin = (CryptoCoin)((currentViewCoin + 1) % 4);
-        const WalletAccount* acc = wallet->getAccount(currentViewCoin);
-        const char* name = "BITCOIN";
-        const char* sym  = "BTC (SegWit)";
-        uint8_t cr = 255, cg = 140, cb = 0;
-        if (currentViewCoin == COIN_ETH)  { name = "ETHEREUM / PEPE"; sym = "ETH (ERC-20)"; cr = 138; cg = 75; cb = 255; }
-        if (currentViewCoin == COIN_SOL)  { name = "SOLANA";          sym = "SOL (Ed25519)"; cr = 20; cg = 241; cb = 149; }
-        if (currentViewCoin == COIN_DOGE) { name = "DOGECOIN";        sym = "DOGE (Legacy)"; cr = 255; cg = 195; cb = 15; }
-
-        rgb.flashTap(cr, cg, cb, 60);
-        rgb.setCoinColor(cr, cg, cb);
-        ui.renderWalletScreen(name, sym, acc ? acc->address : "", acc ? acc->derivationPath : "");
+        const char* lookupSym = "BTC";
+        if (currentViewCoin == COIN_ETH)  lookupSym = "ETH";
+        if (currentViewCoin == COIN_SOL)  lookupSym = "SOL";
+        if (currentViewCoin == COIN_DOGE) lookupSym = "DOGE";
+        RgbColor c = RgbStatus::getCoinRgb(lookupSym);
+        rgb.flashTap(c.r, c.g, c.b, 60);
+        showVaultCoinScreen(currentViewCoin);
     } else if (ev == BTN_DOUBLE_CLICK) {
         // Double click launches the On-Device Verified Seed Words Viewer!
         deviceState = STATE_SEED_WORDS_VIEW;
@@ -587,13 +596,7 @@ void processSeedWordsViewState(ButtonEvent ev) {
     } else if (ev == BTN_LONG_PRESS || ev == BTN_VERY_LONG_PRESS) {
         // Exit back to Vault Dashboard
         deviceState = STATE_VAULT_DASHBOARD;
-        const WalletAccount* acc = wallet->getAccount(currentViewCoin);
-        const char* name = "BITCOIN";
-        const char* sym  = "BTC (SegWit)";
-        if (currentViewCoin == COIN_ETH)  { name = "ETHEREUM / PEPE"; sym = "ETH (ERC-20)"; }
-        if (currentViewCoin == COIN_SOL)  { name = "SOLANA";          sym = "SOL (Ed25519)"; }
-        if (currentViewCoin == COIN_DOGE) { name = "DOGECOIN";        sym = "DOGE (Legacy)"; }
-        ui.renderWalletScreen(name, sym, acc ? acc->address : "", acc ? acc->derivationPath : "");
+        showVaultCoinScreen(currentViewCoin);
         Serial.println("[VAULT] Exited Seed Words View -> Vault Dashboard");
     } else if (ev == BTN_PANIC_HOLD) {
         DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
@@ -726,10 +729,7 @@ void processAirGapSdSignState(ButtonEvent ev) {
     } else if (ev == BTN_DOUBLE_CLICK || ev == BTN_VERY_LONG_PRESS) {
         // Exit back to Vault Dashboard
         deviceState = STATE_VAULT_DASHBOARD;
-        currentViewCoin = COIN_BTC;
-        rgb.setCoinColor(255, 140, 0);
-        const WalletAccount* acc = wallet->getAccount(COIN_BTC);
-        ui.renderWalletScreen("BITCOIN", "BTC (SegWit)", acc ? acc->address : "", acc ? acc->derivationPath : "");
+        showVaultCoinScreen(COIN_BTC);
     } else if (ev == BTN_LONG_PRESS) {
         if (psbtLoaded && currentPsbt.isValid) {
             char signedPath[64] = "";
@@ -740,10 +740,7 @@ void processAirGapSdSignState(ButtonEvent ev) {
                 Serial.printf("[PSBT] ✅ Signed and saved to: %s\n", signedPath);
                 delay(1500);
                 deviceState = STATE_VAULT_DASHBOARD;
-                currentViewCoin = COIN_BTC;
-                rgb.setCoinColor(255, 140, 0);
-                const WalletAccount* acc = wallet->getAccount(COIN_BTC);
-                ui.renderWalletScreen("BITCOIN", "BTC (SegWit)", acc ? acc->address : "", acc ? acc->derivationPath : "");
+                showVaultCoinScreen(COIN_BTC);
             } else {
                 rgb.flashDoubleTap(255, 0, 0);
                 ui.renderErrorBanner("SIGNING FAILED");
@@ -916,11 +913,8 @@ void handleSerialCommands() {
         pin.trim();
         if (wallet->unlock(pin.c_str())) {
             rgb.flashRainbow(800);
-            rgb.setCoinColor(255, 140, 0);
             deviceState = STATE_VAULT_DASHBOARD;
-            currentViewCoin = COIN_BTC;
-            const WalletAccount* acc = wallet->getAccount(COIN_BTC);
-            ui.renderWalletScreen("BITCOIN", "BTC (SegWit)", acc ? acc->address : "bc1q...", acc ? acc->derivationPath : "m/84'/0'/0'/0/0");
+            showVaultCoinScreen(COIN_BTC);
             Serial.println("[VAULT] ✅ Unlocked successfully! Master keys derived in memory.");
         } else {
             rgb.setMode(LED_MODE_STROBE_RED);

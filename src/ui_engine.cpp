@@ -16,6 +16,16 @@ uint16_t getCoinColor565(const char* symbol) {
     return ((uint16_t)(c.r >> 3) << 11) | ((uint16_t)(c.g >> 2) << 5) | (uint16_t)(c.b >> 3);
 }
 
+static inline uint16_t dimColor565(uint16_t c, float factor) {
+    uint8_t r = ((c >> 11) & 0x1F);
+    uint8_t g = ((c >> 5) & 0x3F);
+    uint8_t b = (c & 0x1F);
+    r = (uint8_t)(r * factor);
+    g = (uint8_t)(g * factor);
+    b = (uint8_t)(b * factor);
+    return (r << 11) | (g << 5) | b;
+}
+
 void UiEngine::begin(TFT_eSPI* tft) {
     _tft = tft;
     if (_tft) {
@@ -309,13 +319,25 @@ void UiEngine::renderCryptoSignPrompt(const char* chain, const char* recipient, 
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);
 
-    drawHeader("SIGN TRANSACTION", 0x3000, COLOR_CYBER_GOLD);
+    uint16_t chainColor = getCoinColor565(chain);
+    uint16_t darkTint   = dimColor565(chainColor, 0.22f);
+
+    // Left glowing brand pillar
+    _sprite->fillRect(0, 0, 2, DISP_H, chainColor);
+
+    // Header Zone with themed accent
+    _sprite->fillRect(2, 0, DISP_W - 2, 13, darkTint);
+    _sprite->drawFastHLine(0, 13, DISP_W, chainColor);
+
+    _sprite->setTextDatum(TL_DATUM);
+    _sprite->setTextColor(chainColor, darkTint);
+    _sprite->drawString("SIGN TRANSACTION", 6, 2, 1);
 
     char addrTrunc[18];
     truncateAddress(recipient, addrTrunc, sizeof(addrTrunc));
 
     _sprite->setTextDatum(TL_DATUM);
-    _sprite->setTextColor(COLOR_CYBER_GOLD, COLOR_BG);
+    _sprite->setTextColor(chainColor, COLOR_BG);
     _sprite->drawString(chain, 8, 18, 1);
 
     _sprite->setTextColor(0xFFFF, COLOR_BG);
@@ -326,6 +348,8 @@ void UiEngine::renderCryptoSignPrompt(const char* chain, const char* recipient, 
     _sprite->setTextColor(COLOR_NEON_CYAN, COLOR_BG);
     _sprite->drawString(addrTrunc, 32, 36, 1);
 
+    _sprite->drawFastHLine(0, 66, DISP_W, darkTint);
+    _sprite->drawFastHLine(0, 66, 36, chainColor);
     drawFooter("[●] HOLD: SIGN  [▲] EXIT", 0, 0.0f);
 
     _sprite->pushSprite(0, 0);
@@ -337,29 +361,39 @@ void UiEngine::renderWalletScreen(const char* coinName, const char* symbol, cons
 
     // Determine coin branding color (matching master brand palette)
     uint16_t coinColor = getCoinColor565(symbol);
+    uint16_t darkTint  = dimColor565(coinColor, 0.22f);
 
-    drawHeader(coinName, 0x0008, coinColor);
+    // ── Left Accent Pillar: glowing brand bar ────────────────────────────────
+    _sprite->fillRect(0, 0, 2, DISP_H, coinColor);
+
+    // ── Header Zone with branded tint and accent divider ─────────────────────
+    _sprite->fillRect(2, 0, DISP_W - 2, 13, darkTint);
+    _sprite->drawFastHLine(0, 13, DISP_W, coinColor);
+
+    _sprite->setTextDatum(TL_DATUM);
+    _sprite->setTextColor(coinColor, darkTint);
+    _sprite->drawString(coinName, 6, 2, 1);
 
     // Top metadata row: Coin Symbol (Left) & Derivation Path (Right)
-    _sprite->fillRoundRect(4, 16, 44, 11, 2, coinColor);
+    _sprite->fillRoundRect(6, 16, 44, 11, 2, coinColor);
     _sprite->setTextDatum(MC_DATUM);
     _sprite->setTextColor(0x0000, coinColor);
-    _sprite->drawString(symbol, 26, 21, 1);
+    _sprite->drawString(symbol, 28, 21, 1);
 
     _sprite->setTextDatum(TR_DATUM);
     _sprite->setTextColor(0x8410, COLOR_BG);
     _sprite->drawString(path, 156, 17, 1);
 
-    // Address Display Card (Y: 29..64)
-    _sprite->fillRoundRect(4, 29, DISP_W - 8, 35, 3, 0x0842);
-    _sprite->fillRoundRect(4, 29, 3, 35, 1, coinColor);
+    // Address Display Card (Y: 29..64) with branded vertical accent bar
+    _sprite->fillRoundRect(6, 29, DISP_W - 10, 35, 3, 0x0842);
+    _sprite->fillRoundRect(6, 29, 3, 35, 1, coinColor);
 
     _sprite->setTextDatum(TL_DATUM);
     _sprite->setTextColor(0xFFFF, 0x0842);
 
     size_t addrLen = address ? strlen(address) : 0;
     if (addrLen <= 23) {
-        _sprite->drawString(address ? address : "No Address", 11, 41, 1);
+        _sprite->drawString(address ? address : "No Address", 13, 41, 1);
     } else {
         char line1[24];
         char line2[32];
@@ -369,11 +403,14 @@ void UiEngine::renderWalletScreen(const char* coinName, const char* symbol, cons
         strncpy(line2, address + split, sizeof(line2) - 1);
         line2[sizeof(line2) - 1] = '\0';
 
-        _sprite->drawString(line1, 11, 34, 1);
+        _sprite->drawString(line1, 13, 34, 1);
         _sprite->setTextColor(0xDEFB, 0x0842);
-        _sprite->drawString(line2, 11, 48, 1);
+        _sprite->drawString(line2, 13, 48, 1);
     }
 
+    // ── Footer divider and hints ─────────────────────────────────────────────
+    _sprite->drawFastHLine(0, 66, DISP_W, darkTint);
+    _sprite->drawFastHLine(0, 66, 36, coinColor);
     drawFooter("[●] COIN [▲▲] SEED [■] LOCK", 0, 0.0f);
 
     _sprite->pushSprite(0, 0);
@@ -385,6 +422,10 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
 
     // ── Brand Colors: exact RGB565 derived from master brand palette ─────────
     uint16_t coinColor = getCoinColor565(symbol);
+    uint16_t darkTint  = dimColor565(coinColor, 0.22f);
+
+    // ── Left Accent Pillar: glowing brand bar across whole screen ────────────
+    _sprite->fillRect(0, 0, 2, DISP_H, coinColor);
 
     // ── Category badge: [MEME] in magenta | [CRYPTO] in cyan ─────────────────
     bool isMeme = (strcmp(symbol,"DOGE")==0 || strcmp(symbol,"SHIB")==0 ||
@@ -393,12 +434,19 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
                    strcmp(symbol,"BRETT")==0|| strcmp(symbol,"MOG")==0  ||
                    strcmp(symbol,"TURBO")==0|| strcmp(symbol,"POPCAT")==0||
                    strcmp(symbol,"NEIRO")==0|| strcmp(symbol,"GOAT")==0);
-    uint16_t badgeColor  = isMeme ? 0xF81F : 0x07FF;
+    uint16_t badgeColor    = isMeme ? 0xF81F : 0x07FF;
     const char* badgeLabel = isMeme ? "[MEME]" : "[CRYPTO]";
+
+    // ── Header Zone (Y: 0..13) with Branded Backdrop & Accent Divider ────────
+    _sprite->fillRect(2, 0, DISP_W - 2, 13, darkTint);
+    _sprite->drawFastHLine(0, 13, DISP_W, coinColor);
 
     char hdr[36];
     snprintf(hdr, sizeof(hdr), "%s (%d/%d) %s", symbol, activeIdx + 1, totalActive, isLive ? "[LIVE]" : "[AIRGAP]");
-    drawHeader(hdr, 0x0008, isLive ? COLOR_SIGNAL_GREEN : coinColor);
+    
+    _sprite->setTextDatum(TL_DATUM);
+    _sprite->setTextColor(isLive ? COLOR_SIGNAL_GREEN : coinColor, darkTint);
+    _sprite->drawString(hdr, 6, 2, 1);
 
     // Primary Content Zone (Y: 14..65)
     _sprite->setTextDatum(TL_DATUM);
@@ -456,6 +504,7 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
     float assetFiat = balance * priceUsd;
     char valStr[32];
     snprintf(valStr, sizeof(valStr), "VAL: $%.2f", assetFiat);
+    _sprite->setTextDatum(TL_DATUM);
     _sprite->setTextColor(COLOR_CYBER_GOLD, COLOR_BG);
     _sprite->drawString(valStr, 8, 50, 1);
 
@@ -464,17 +513,19 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
     _sprite->setTextColor(0xAD55, COLOR_BG);
     _sprite->drawString(totStr, 96, 50, 1);
 
-    drawFooter("", 0, 0.0f);
+    // ── Footer Zone (Y: 66..79) with Brand Divider ──────────────────────────
+    _sprite->drawFastHLine(0, 66, DISP_W, darkTint);
+    _sprite->drawFastHLine(0, 66, 36, coinColor); // glowing accent notch
 
     // Category badge bottom-left: [MEME] magenta | [CRYPTO] cyan
     _sprite->setTextDatum(BL_DATUM);
-    _sprite->setTextColor(badgeColor, COLOR_DARK_GRAY);
-    _sprite->drawString(badgeLabel, 3, 79, 1);
+    _sprite->setTextColor(badgeColor, COLOR_BG);
+    _sprite->drawString(badgeLabel, 6, 78, 1);
 
     // Hint text right-aligned in footer
     _sprite->setTextDatum(BR_DATUM);
-    _sprite->setTextColor(0x8410, COLOR_DARK_GRAY);
-    _sprite->drawString("[●]COIN [■]PIN", 157, 79, 1);
+    _sprite->setTextColor(0x8410, COLOR_BG);
+    _sprite->drawString("[●]COIN [■]PIN", 157, 78, 1);
 
     _sprite->pushSprite(0, 0);
 }

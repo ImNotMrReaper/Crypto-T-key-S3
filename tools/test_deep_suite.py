@@ -42,9 +42,13 @@ class DeepTester:
 
     def connect_serial(self):
         try:
-            self.ser = serial.Serial(self.serial_port, self.baudrate, timeout=1.5)
+            self.ser = serial.Serial()
+            self.ser.port = self.serial_port
+            self.ser.baudrate = self.baudrate
+            self.ser.timeout = 1.5
+            self.ser.rts = False
             self.ser.dtr = True
-            self.ser.rts = True
+            self.ser.open()
             time.sleep(0.3)
             self.ser.reset_input_buffer()
             return True

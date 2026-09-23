@@ -11,8 +11,19 @@
 #include "mbedtls/bignum.h"
 #include <Crypto.h>
 #include <SHA3.h>
+#include <KeccakCore.h>
 #include <Ed25519.h>
 #include <uECC.h>
+
+static void keccak256(const void* data, size_t len, uint8_t hash[32]) {
+    KeccakCore core;
+    core.setCapacity(512); // Keccak-256 rate is 1600 - 512 = 1088 bits (136 bytes)
+    core.reset();
+    core.update(data, len);
+    core.pad(0x01); // 0x01 is canonical Ethereum Keccak padding (vs 0x06 for NIST SHA-3)
+    core.extract(hash, 32);
+    core.clear();
+}
 
 void Bip32Engine::secureZero(void* ptr, size_t len) {
     if (!ptr || len == 0) return;
@@ -199,10 +210,8 @@ bool Bip32Engine::deriveEthAddress(const uint8_t seed[64], char outAddr[64], uin
     if (outPrivKey) memcpy(outPrivKey, child.privKey, 32);
 
     // Keccak-256 of uncompressed public key (64 bytes, skipping initial 0x04)
-    SHA3_256 keccak;
     uint8_t hash[32];
-    keccak.update(child.pubKeyUncompressed + 1, 64);
-    keccak.finalize(hash, sizeof(hash));
+    keccak256(child.pubKeyUncompressed + 1, 64, hash);
 
     // Last 20 bytes is raw address -> EIP-55 Checksum
     eip55Encode(hash + 12, outAddr);
@@ -217,24 +226,61 @@ bool Bip32Engine::deriveSolAddress(const uint8_t seed[64], char outAddr[64], uin
     const mbedtls_md_info_t* mdInfo = mbedtls_md_info_from_type(MBEDTLS_MD_SHA512);
     uint8_t hmacOut[64];
 
-    // Master node for Ed25519 uses key "ed25519 seed"
+    // Master node for Ed25519 uses key "ed25519 seed" per SLIP-0010
     int ret = mbedtls_md_hmac(mdInfo,
                               (const unsigned char*)"ed25519 seed", 12,
                               seed, 64,
                               hmacOut);
     if (ret != 0) return false;
 
-    uint8_t privKey[32];
-    memcpy(privKey, hmacOut, 32);
+    uint8_t k[32];
+    uint8_t c[32];
+    memcpy(k, hmacOut, 32);
+    memcpy(c, hmacOut + 32, 32);
+    secureZero(hmacOut, sizeof(hmacOut));
 
-    if (outPrivKey) memcpy(outPrivKey, privKey, 32);
+    // SLIP-0010 path for Solana: m/44'/501'/0'/0' (all hardened indices)
+    const uint32_t solPath[4] = {
+        44  | 0x80000000,
+        501 | 0x80000000,
+        0   | 0x80000000,
+        0   | 0x80000000
+    };
+
+    for (int step = 0; step < 4; step++) {
+        uint32_t index = solPath[step];
+        // Hardened child derivation data: 0x00 || parent_k || ser32(index) (37 bytes)
+        uint8_t data[37];
+        data[0] = 0x00;
+        memcpy(data + 1, k, 32);
+        data[33] = (index >> 24) & 0xFF;
+        data[34] = (index >> 16) & 0xFF;
+        data[35] = (index >> 8) & 0xFF;
+        data[36] = index & 0xFF;
+
+        ret = mbedtls_md_hmac(mdInfo, c, 32, data, sizeof(data), hmacOut);
+        secureZero(data, sizeof(data));
+        if (ret != 0) {
+            secureZero(k, sizeof(k));
+            secureZero(c, sizeof(c));
+            secureZero(hmacOut, sizeof(hmacOut));
+            return false;
+        }
+
+        // In SLIP-0010 for Ed25519: child_k = I_L, child_c = I_R
+        memcpy(k, hmacOut, 32);
+        memcpy(c, hmacOut + 32, 32);
+        secureZero(hmacOut, sizeof(hmacOut));
+    }
+
+    if (outPrivKey) memcpy(outPrivKey, k, 32);
 
     uint8_t pubKey[32];
-    Ed25519::derivePublicKey(pubKey, privKey);
+    Ed25519::derivePublicKey(pubKey, k);
 
     base58Encode(pubKey, 32, outAddr, 64);
-    secureZero(hmacOut, sizeof(hmacOut));
-    secureZero(privKey, sizeof(privKey));
+    secureZero(k, sizeof(k));
+    secureZero(c, sizeof(c));
     return true;
 }
 
@@ -246,10 +292,8 @@ void Bip32Engine::eip55Encode(const uint8_t rawAddr[20], char* outStr) {
     }
     hex[40] = '\0';
 
-    SHA3_256 keccak;
     uint8_t hash[32];
-    keccak.update((const uint8_t*)hex, 40);
-    keccak.finalize(hash, sizeof(hash));
+    keccak256((const uint8_t*)hex, 40, hash);
 
     outStr[0] = '0';
     outStr[1] = 'x';

@@ -354,7 +354,13 @@ def sync_cycle(port, ws_active=False):
     global _serial_port
 
     print(f"[TRACKER] ⚡ Connecting to Crypto TKey S3 on {port}...")
-    ser = serial.Serial(port, 115200, timeout=2.0)
+    ser = serial.Serial()
+    ser.port = port
+    ser.baudrate = 115200
+    ser.timeout = 2.0
+    ser.rts = False
+    ser.dtr = True
+    ser.open()
     time.sleep(0.4)
 
     with _serial_lock:
@@ -444,7 +450,13 @@ def live_push_loop(port, coingecko_interval=30, balance_interval=300):
 
     print(f"[TRACKER] 🔌 Opening persistent serial on {port}...")
     try:
-        ser = serial.Serial(port, 115200, timeout=2.0)
+        ser = serial.Serial()
+        ser.port = port
+        ser.baudrate = 115200
+        ser.timeout = 2.0
+        ser.rts = False
+        ser.dtr = True
+        ser.open()
     except Exception as e:
         print(f"[TRACKER] Serial open error: {e}", file=sys.stderr)
         return
@@ -528,7 +540,13 @@ def find_device_port():
     candidates = glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*")
     for port in candidates:
         try:
-            s = serial.Serial(port, 115200, timeout=0.5)
+            s = serial.Serial()
+            s.port = port
+            s.baudrate = 115200
+            s.timeout = 0.5
+            s.rts = False
+            s.dtr = True
+            s.open()
             s.write(b"status\n")
             time.sleep(0.15)
             resp = s.read(256).decode(errors="ignore")

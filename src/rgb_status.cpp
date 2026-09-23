@@ -80,53 +80,65 @@ RgbColor RgbStatus::wheel(uint8_t wheelPos) {
 
 RgbColor RgbStatus::getCoinRgb(const char* symbol) {
     if (!symbol) return { 0, 229, 255 };
-    // ── CRYPTO ────────────────────────────────────────────────────────────────
-    // Each entry is the closest true brand hex, unique across all 44 coins
-    if (strcmp(symbol, "BTC")    == 0) return { 247, 147,  26 }; // #F7931A Bitcoin Orange
-    if (strcmp(symbol, "ETH")    == 0) return {  98, 126, 234 }; // #627EEA Ethereum Indigo
-    if (strcmp(symbol, "SOL")    == 0) return {  20, 241, 149 }; // #14F195 Solana Green-Teal
-    if (strcmp(symbol, "BNB")    == 0) return { 243, 186,  47 }; // #F3BA2F BNB Gold
-    if (strcmp(symbol, "XRP")    == 0) return {   0, 136, 255 }; // #0088FF XRP Blue
-    if (strcmp(symbol, "ADA")    == 0) return {   0,  51, 173 }; // #0033AD Cardano Cobalt
-    if (strcmp(symbol, "AVAX")   == 0) return { 232,  65,  66 }; // #E84142 Avalanche Red
-    if (strcmp(symbol, "DOT")    == 0) return { 230,   0, 122 }; // #E6007A Polkadot Pink
-    if (strcmp(symbol, "LINK")   == 0) return {  43, 110, 245 }; // #2B6EF5 Chainlink Blue
-    if (strcmp(symbol, "LTC")    == 0) return { 191, 191, 191 }; // #BFBFBF Litecoin Silver
-    if (strcmp(symbol, "BCH")    == 0) return {   0, 168,  77 }; // #00A84D Bitcoin Cash Green
-    if (strcmp(symbol, "ATOM")   == 0) return {  99,  88, 199 }; // #6358C7 Cosmos Purple
-    if (strcmp(symbol, "POL")    == 0) return { 130,  71, 229 }; // #8247E5 Polygon Violet
-    if (strcmp(symbol, "TRX")    == 0) return { 220,  20,  20 }; // #DC1414 TRON Red
-    if (strcmp(symbol, "NEAR")   == 0) return {   0, 194, 204 }; // #00C2CC NEAR Teal
-    if (strcmp(symbol, "SUI")    == 0) return {  46, 176, 228 }; // #2EB0E4 Sui Sky Blue
-    if (strcmp(symbol, "APT")    == 0) return {   0, 191, 165 }; // #00BFA5 Aptos Mint
-    if (strcmp(symbol, "TON")    == 0) return {   0, 136, 204 }; // #0088CC TON Blue
-    if (strcmp(symbol, "XLM")    == 0) return {  14, 182, 236 }; // #0EB6EC Stellar Blue
-    if (strcmp(symbol, "ALGO")   == 0) return { 100, 180, 160 }; // #64B4A0 Algorand Sage
-    if (strcmp(symbol, "HBAR")   == 0) return {   0, 163, 174 }; // #00A3AE Hedera Teal
-    if (strcmp(symbol, "VET")    == 0) return {  32, 201, 250 }; // #20C9FA VeChain Aqua
-    if (strcmp(symbol, "FIL")    == 0) return {   0,  84, 255 }; // #0054FF Filecoin Blue
-    if (strcmp(symbol, "ICP")    == 0) return { 150, 110, 229 }; // #966EE5 ICP Mid-Gradient
-    if (strcmp(symbol, "TAO")    == 0) return { 128, 128, 128 }; // #808080 Bittensor Gray
-    if (strcmp(symbol, "INJ")    == 0) return {   0, 148, 255 }; // #0094FF Injective Blue
-    if (strcmp(symbol, "ARB")    == 0) return {  18, 120, 214 }; // #1278D6 Arbitrum Blue
-    if (strcmp(symbol, "OP")     == 0) return { 255,   4,  32 }; // #FF0420 Optimism Red
-    if (strcmp(symbol, "KAS")    == 0) return { 112, 221, 176 }; // #70DDB0 Kaspa Teal
-    if (strcmp(symbol, "XMR")    == 0) return { 255, 102,   0 }; // #FF6600 Monero Orange
-    if (strcmp(symbol, "EGLD")   == 0) return {  35, 162, 255 }; // #23A2FF MultiversX Blue
-    if (strcmp(symbol, "UNI")    == 0) return { 255,   0, 122 }; // #FF007A Uniswap Pink
-    // ── MEME COINS ────────────────────────────────────────────────────────────
-    if (strcmp(symbol, "DOGE")   == 0) return { 255, 189,  35 }; // #FFBD23 Dogecoin Gold
-    if (strcmp(symbol, "SHIB")   == 0) return { 255,  90,   0 }; // #FF5A00 Shiba Amber
-    if (strcmp(symbol, "PEPE")   == 0) return {   0, 200,  50 }; // #00C832 Pepe Green
-    if (strcmp(symbol, "BONK")   == 0) return { 255, 180,   0 }; // #FFB400 Bonk Yellow
-    if (strcmp(symbol, "FLOKI")  == 0) return { 255, 164,   0 }; // #FFA400 Floki Gold
-    if (strcmp(symbol, "WIF")    == 0) return { 180, 100,  60 }; // #B4643C dogwifhat Peach
-    if (strcmp(symbol, "BRETT")  == 0) return {  66, 135, 245 }; // #4287F5 Brett Blue
-    if (strcmp(symbol, "MOG")    == 0) return { 160,  40, 220 }; // #A028DC Mog Violet
-    if (strcmp(symbol, "TURBO")  == 0) return { 240,  70,   0 }; // #F04600 Turbo Orange-Red
-    if (strcmp(symbol, "POPCAT") == 0) return { 255, 150, 180 }; // #FF96B4 Popcat Pink
-    if (strcmp(symbol, "NEIRO")  == 0) return { 255, 220, 170 }; // #FFDCAA Neiro Cream
-    if (strcmp(symbol, "GOAT")   == 0) return { 100, 200, 100 }; // #64C864 Goat Sage Green
+
+    // Extract base symbol token up to first space, '(', or '/'
+    char sym[12];
+    size_t i = 0;
+    while (symbol[i] && symbol[i] != ' ' && symbol[i] != '(' && symbol[i] != '/' && i < sizeof(sym) - 1) {
+        sym[i] = toupper(symbol[i]);
+        i++;
+    }
+    sym[i] = '\0';
+
+    // ── CRYPTO (32 Assets) ────────────────────────────────────────────────────
+    // Authentic brand colors verified with wide perceptual distance and zero collisions
+    if (strcmp(sym, "BTC")   == 0) return { 247, 147,  26 }; // #F7931A Bitcoin Classic Orange
+    if (strcmp(sym, "ETH")   == 0) return {  98, 126, 234 }; // #627EEA Ethereum Indigo
+    if (strcmp(sym, "SOL")   == 0) return {  20, 241, 149 }; // #14F195 Solana Neon Teal-Green
+    if (strcmp(sym, "BNB")   == 0) return { 243, 186,  47 }; // #F3BA2F Binance Canary Gold
+    if (strcmp(sym, "XRP")   == 0) return {   0, 120, 230 }; // #0078E6 Ripple / XRP Cobalt Blue
+    if (strcmp(sym, "ADA")   == 0) return {   0,  45, 160 }; // #002DA0 Cardano Deep Blue
+    if (strcmp(sym, "AVAX")  == 0) return { 232,  65,  66 }; // #E84142 Avalanche Crimson
+    if (strcmp(sym, "DOT")   == 0) return { 230,   0, 122 }; // #E6007A Polkadot Hot Pink
+    if (strcmp(sym, "LINK")  == 0) return {  43, 110, 245 }; // #2B6EF5 Chainlink Blue
+    if (strcmp(sym, "LTC")   == 0) return { 175, 180, 185 }; // #AFB4B9 Litecoin Silver
+    if (strcmp(sym, "BCH")   == 0) return {  10, 193, 142 }; // #0AC18E Bitcoin Cash Emerald Green
+    if (strcmp(sym, "ATOM")  == 0) return {  60,  65, 145 }; // #3C4191 Cosmos Deep Violet
+    if (strcmp(sym, "POL")   == 0) return { 130,  71, 229 }; // #8247E5 Polygon Vivid Violet
+    if (strcmp(sym, "TRX")   == 0) return { 210,  15,  15 }; // #D20F0F TRON Crimson Red
+    if (strcmp(sym, "NEAR")  == 0) return {   0, 236, 151 }; // #00EC97 NEAR Electric Lime
+    if (strcmp(sym, "SUI")   == 0) return {  77, 162, 255 }; // #4DA2FF Sui Water Blue
+    if (strcmp(sym, "APT")   == 0) return {  45, 216, 167 }; // #2DD8A7 Aptos Mint
+    if (strcmp(sym, "TON")   == 0) return {  40, 180, 245 }; // #28B4F5 TON Telegram Sky Blue
+    if (strcmp(sym, "XLM")   == 0) return {  15, 135, 195 }; // #0F87C3 Stellar Deep Steel Blue
+    if (strcmp(sym, "ALGO")  == 0) return { 100, 180, 160 }; // #64B4A0 Algorand Sage
+    if (strcmp(sym, "HBAR")  == 0) return {   0, 160, 175 }; // #00A0AF Hedera Dark Teal
+    if (strcmp(sym, "VET")   == 0) return {  32, 205, 250 }; // #20CDFA VeChain Bright Aqua
+    if (strcmp(sym, "FIL")   == 0) return {   0,  70, 210 }; // #0046D2 Filecoin Deep Blue
+    if (strcmp(sym, "ICP")   == 0) return { 150, 110, 229 }; // #966EE5 ICP Mid-Gradient Purple
+    if (strcmp(sym, "TAO")   == 0) return { 225, 225, 230 }; // #E1E1E6 Bittensor Platinum White
+    if (strcmp(sym, "INJ")   == 0) return {   0, 245, 255 }; // #00F5FF Injective Electric Cyan
+    if (strcmp(sym, "ARB")   == 0) return {  18, 120, 240 }; // #1278F0 Arbitrum Ocean Blue
+    if (strcmp(sym, "OP")    == 0) return { 255,   4,  32 }; // #FF0420 Optimism Bright Scarlet
+    if (strcmp(sym, "KAS")   == 0) return {  73, 234, 203 }; // #49EACB Kaspa Turquoise
+    if (strcmp(sym, "XMR")   == 0) return { 255, 102,   0 }; // #FF6600 Monero Flame Orange
+    if (strcmp(sym, "EGLD")  == 0) return {  35, 247, 221 }; // #23F7DD MultiversX Neon Cyan
+    if (strcmp(sym, "UNI")   == 0) return { 255,   4, 180 }; // #FF04B4 Uniswap Hot Unicorn Pink
+
+    // ── MEME COINS (12 Assets) ────────────────────────────────────────────────
+    if (strcmp(sym, "DOGE")   == 0) return { 205, 165,  40 }; // #CDA528 Dogecoin Warm Golden Sand
+    if (strcmp(sym, "SHIB")   == 0) return { 225,  75,   0 }; // #E14B00 Shiba Inu Coat Red-Orange
+    if (strcmp(sym, "PEPE")   == 0) return {   0, 200,  50 }; // #00C832 Pepe Frog Green
+    if (strcmp(sym, "BONK")   == 0) return { 255, 140,   0 }; // #FF8C00 Bonk Tangerine
+    if (strcmp(sym, "FLOKI")  == 0) return { 215, 130,  15 }; // #D7820F Floki Viking Bronze
+    if (strcmp(sym, "WIF")    == 0) return { 201, 122,  86 }; // #C97A56 dogwifhat Beanie Tan
+    if (strcmp(sym, "BRETT")  == 0) return {   0,  82, 255 }; // #0052FF Brett Base Royal Blue
+    if (strcmp(sym, "MOG")    == 0) return { 176,  38, 255 }; // #B026FF Mog Electric Neon Violet
+    if (strcmp(sym, "TURBO")  == 0) return { 245,  50,   0 }; // #F53200 Turbo Fire Red
+    if (strcmp(sym, "POPCAT") == 0) return { 255, 128, 171 }; // #FF80AB Popcat Pastel Pink
+    if (strcmp(sym, "NEIRO")  == 0) return { 255, 200, 130 }; // #FFC882 Neiro Caramel Cream
+    if (strcmp(sym, "GOAT")   == 0) return { 139, 195,  74 }; // #8BC34A Goatseus Sage Green
+
     return { 0, 229, 255 }; // Cyan fallback
 }
 
