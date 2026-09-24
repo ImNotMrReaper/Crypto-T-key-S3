@@ -1,69 +1,80 @@
-# ⚡ Crypto TKey S3 — Hardware Security Key & Offline Crypto Vault 🛡️
+# Crypto T-Key S3
 
-**Crypto TKey S3** (formerly `tdongle-s3-security-key`) is a James Bond-style FIDO2/WebAuthn hardware security key, offline cryptocurrency transaction clear-signer, and air-gapped vault powered by the **LilyGo T-Dongle S3** (`ESP32-S3`).
+**Crypto T-Key S3** is an ESP32-S3 hardware security key and offline cryptocurrency vault for the LilyGo T-Dongle S3.
 
----
+> **Security status:** This is security-sensitive embedded software. Treat it as experimental until you have independently reviewed the source, built the firmware reproducibly, and tested it on hardware. Never use it to protect funds or credentials you cannot afford to lose.
 
-## 🔐 Core Capabilities
+## What it does
 
-- **FIDO2 / WebAuthn Passkeys:** True CTAP2 over USB HID (`0xF1D0`) for Google, GitHub, Bitwarden, and Linux PAM. Displays relying party origin on the 0.96" TFT LCD and requires physical touch (User Presence) to approve.
-- **Dynamic Mode-Switched USB:**
-  - *Normal Plug-in:* Pure FIDO2 CTAPHID (stealth, zero serial ports exposed).
-  - *Boot-Hold Plug-in:* Composite CTAPHID + CDC Serial console on `/dev/ttyACM0` for live diagnostics.
-- **Tiered Security Lifecycle:**
-  - *Tier 1 (Web Logins):* Ready state (Cyan LED) with 1-tap touch (no PIN fatigue).
-  - *Tier 2 (Crypto & UV):* Master PIN gate (Amber LED) unlocking a 3-minute signing window.
-- **Crypto Clear-Signer (WYSIWYS):** What You See Is What You Sign on Bitcoin, Ethereum, and Solana.
-- **Air-Gapped MicroSD Signer:** Offline PSBT parsing and signing with zero RF radiation.
-- **Smart Air-Gap Ticker:** 0 RF on PC (host-streamed prices); Wi-Fi burst mode exclusively when plugged into wall power.
-- **Tri-Level Coercion & Anti-Tamper:**
-  - *Level 1:* Plausible deniability decoy PIN (`8888`) unlocking secondary decoy wallet.
-  - *Level 2:* Panic hold (>5.5s) flash scrub + authentic Guru Meditation crash decoy.
-  - *Level 3:* Anti-hammering auto-nuke after 10 failed PIN attempts.
+- FIDO2/WebAuthn and CTAP2 authentication over USB HID.
+- Physical user-presence confirmation for passkey operations.
+- On-device PIN-gated cryptocurrency wallet workflows.
+- BIP-39 seed generation and on-device verification.
+- Bitcoin PSBT parsing and signing from MicroSD.
+- EVM transaction decoding and clear-signing prompts.
+- Encrypted MicroSD vault containers using AES-256-GCM.
+- Duress and panic zeroization workflows.
+- Low-power, USB-aware Wi-Fi bursts for optional portfolio data.
 
----
+## What was upgraded in this repository
 
-## 📟 Hardware Pinout
+- Unified project branding under **Crypto T-Key S3**.
+- Added a security policy and responsible-disclosure guidance.
+- Added a documented security audit with prioritized findings, limitations, and release gates.
+- Documented the trust boundaries, threat model, secure-build expectations, and operational warnings.
+- Clarified that the firmware is not independently certified and that the eFuse tool is irreversible.
+- Improved build and flashing documentation so production and development workflows are easier to distinguish.
 
-| Component | Pin | Function |
-| :--- | :--- | :--- |
-| **TFT CS** | GPIO 4 | SPI Chip Select (`SPI3_HOST`) |
-| **TFT DC** | GPIO 2 | Data / Command |
-| **TFT RST** | GPIO 1 | Hardware Reset |
-| **TFT MOSI** | GPIO 3 | SPI Master Out |
-| **TFT SCLK** | GPIO 5 | SPI Clock |
-| **TFT BL** | GPIO 38 | Backlight Enable (**Active LOW**) |
-| **RGB LED** | GPIO 40 | WS2812 Single Pixel |
-| **BOOT BTN** | GPIO 0 | Active LOW User Input |
-| **SD CLK** | GPIO 12 | SD_MMC 1-Bit Clock |
-| **SD CMD** | GPIO 16 | SD_MMC Command |
-| **SD D0** | GPIO 17 | SD_MMC Data 0 |
+## Repository layout
 
----
+- `crypto-tkey-s3.ino` — firmware entry point and device state machine.
+- `src/` — FIDO2, wallet, PIN, vault, display, Wi-Fi, and signing subsystems.
+- `host/` — host integration files and udev rules.
+- `tools/` — hardware tests, companion utilities, and production tooling.
+- `arduino_forge.py` — compile, flash, monitor, device detection, and pin-map CLI.
+- `docs/SECURITY-AUDIT.md` — security review and remediation plan.
+- `SECURITY.md` — supported versions and vulnerability-reporting policy.
 
-## 🕹️ Single-Button Morse Cadence Controls
+## Build and flash
 
-| Gesture | Timing | Action |
-| :--- | :--- | :--- |
-| **Short Tap** | < 650ms | Increment PIN digit (+1) / Next option |
-| **Long Press** | 650ms – 2200ms | Confirm digit / Commit transaction / Approve UP |
-| **Extended Hold** | 2200ms – 5500ms | Backspace / Cancel / Lock device |
-| **Panic Hold** | > 5500ms | Instant Flash Scrub & Guru Meditation Decoy Crash |
-
----
-
-## 🚀 Build & Flash Commands
+Install Arduino CLI, the ESP32 Arduino core, and the libraries required by the source tree. Then run:
 
 ```bash
-# Compile
+# Compile only; preferred first step for every change
 make compile
 
-# Flash to T-Dongle S3
+# Detect a connected T-Dongle S3
+make detect
+
+# Show the board pin map
+make pins
+
+# Flash a development device
 make flash
 
-# Open Serial Monitor (when diagnostic boot is active)
+# Open the diagnostic monitor
 make monitor
-
-# Show Hardware Pinout
-make pins
 ```
+
+Do not burn production eFuses during development. The eFuse tool is intentionally separate and must be reviewed against the exact bootloader, partition table, signing keys, and recovery process for the device being secured.
+
+## Security-critical operating rules
+
+1. Provision a strong, unique master PIN and setup password; do not use example values.
+2. Verify transaction recipient, network, amount, and fee on the physical display before signing.
+3. Keep recovery words offline and never paste them into an issue, chat, serial log, browser, or host script.
+4. Treat a connected computer and MicroSD card as untrusted inputs.
+5. Use a dedicated test device until independent review and hardware testing are complete.
+6. Make and test recovery backups before enabling any irreversible hardware hardening.
+7. Review `docs/SECURITY-AUDIT.md` before describing a build as production-ready.
+
+## Project identity
+
+- Display name: **Crypto T-Key S3**
+- Suggested GitHub slug: `Crypto-T-key-S3`
+- Hardware: LilyGo T-Dongle S3 / ESP32-S3
+- Primary language: C++
+
+## License
+
+No license is currently declared. Until a license is added, normal copyright restrictions apply; do not assume that the code may be redistributed or used commercially.
