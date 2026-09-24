@@ -133,7 +133,7 @@ bool SdVaultEngine::writeEncryptedFile(const char* path, const uint8_t* plaintex
     hdr.version = SD_VAULT_VERSION;
     hdr.flags = 0x0000;
     hdr.payloadLen = (uint32_t)len;
-    esp_fill_random(hdr.iv, SD_VAULT_IV_LEN);
+    CryptoP256::secureRandom(hdr.iv, SD_VAULT_IV_LEN);
 
     // 3. Encrypt payload with AES-256-GCM
     uint8_t* ciphertext = (uint8_t*)malloc(len);

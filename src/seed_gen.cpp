@@ -2,6 +2,7 @@
  * seed_gen.cpp — Implementation of Hybrid Entropy BIP-39 Seed Generator
  */
 
+#include "crypto_p256.h"
 #include "seed_gen.h"
 #include "bip39_words.h"
 #include <esp_random.h>
@@ -18,7 +19,7 @@ void SeedGenerator::init() {
 
 void SeedGenerator::resetEntropy() {
     // 1. Seed base pool with hardware TRNG
-    esp_fill_random(_entropyPool, sizeof(_entropyPool));
+    CryptoP256::secureRandom(_entropyPool, sizeof(_entropyPool));
     _sampleCount = 0;
     _lastPressTimeUs = micros();
 }
@@ -40,7 +41,7 @@ void SeedGenerator::recordButtonPressJitter(uint32_t pressDurationUs, uint32_t t
     mbedtls_sha256_free(&ctx);
 
     // Also fill second half with fresh hardware TRNG
-    esp_fill_random(_entropyPool + 32, 32);
+    CryptoP256::secureRandom(_entropyPool + 32, 32);
 
     _sampleCount++;
     _lastPressTimeUs = nowUs;

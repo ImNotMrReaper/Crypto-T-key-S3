@@ -1,21 +1,16 @@
 /**
- * wifi_manager.cpp — Implementation of Persistent Multi-Network Wi-Fi Engine
+ * wifi_manager.cpp — Non-blocking multi-network Wi-Fi with USB-host / wall-power modes
  */
 
 #include "wifi_manager.h"
+#include "wall_ticker.h"
+#include "USB.h"
 
 void WifiManager::begin() {
     loadFromNvs();
-    WiFi.mode(WIFI_STA);
-    WiFi.setTxPower(WIFI_POWER_8_5dBm); // Low TX power to prevent heat dissipation
-    esp_wifi_set_ps(WIFI_PS_MIN_MODEM); // Automatic modem sleep between beacons
-    
-    if (_savedCount > 0) {
-        connectBest();
-    } else {
-        WiFi.mode(WIFI_OFF);
-    }
-    Serial.printf("[WIFI] Initialized. %d saved networks in flash memory.\n", _savedCount);
+    _bootMs = millis();
+    radioOff();  // decided in update(): off on a computer, bursts on wall power
+    Serial.printf("[WIFI] %d saved network(s). Radio off until wall power is detected.\n", _savedCount);
 }
 
 void WifiManager::loadFromNvs() {
@@ -24,30 +19,26 @@ void WifiManager::loadFromNvs() {
 
     _savedCount = _prefs.getInt("count", 0);
     if (_savedCount > MAX_WIFI_NETWORKS) _savedCount = MAX_WIFI_NETWORKS;
+    if (_savedCount < 0) _savedCount = 0;
 
     for (int i = 0; i < _savedCount; i++) {
         char keySsid[16], keyPass[16];
         snprintf(keySsid, sizeof(keySsid), "s_%d", i);
         snprintf(keyPass, sizeof(keyPass), "p_%d", i);
-
-        String s = _prefs.getString(keySsid, "");
-        String p = _prefs.getString(keyPass, "");
-
-        strncpy(_networks[i].ssid, s.c_str(), sizeof(_networks[i].ssid) - 1);
-        strncpy(_networks[i].pass, p.c_str(), sizeof(_networks[i].pass) - 1);
+        memset(&_networks[i], 0, sizeof(_networks[i]));
+        _prefs.getString(keySsid, _networks[i].ssid, sizeof(_networks[i].ssid));
+        _prefs.getString(keyPass, _networks[i].pass, sizeof(_networks[i].pass));
     }
     _prefs.end();
 }
 
 void WifiManager::saveToNvs() {
     if (!_prefs.begin("wifi_cfg", false)) return;
-
     _prefs.putInt("count", _savedCount);
     for (int i = 0; i < _savedCount; i++) {
         char keySsid[16], keyPass[16];
         snprintf(keySsid, sizeof(keySsid), "s_%d", i);
         snprintf(keyPass, sizeof(keyPass), "p_%d", i);
-
         _prefs.putString(keySsid, _networks[i].ssid);
         _prefs.putString(keyPass, _networks[i].pass);
     }
@@ -55,50 +46,41 @@ void WifiManager::saveToNvs() {
 }
 
 bool WifiManager::addNetwork(const char* ssid, const char* pass) {
-    if (!ssid || strlen(ssid) == 0) return false;
+    if (!ssid || strlen(ssid) == 0 || strlen(ssid) > 32) return false;
+    if (pass && strlen(pass) > 64) return false;
 
-    // Check if network already exists, update password if so
     for (int i = 0; i < _savedCount; i++) {
         if (strcmp(_networks[i].ssid, ssid) == 0) {
             strncpy(_networks[i].pass, pass ? pass : "", sizeof(_networks[i].pass) - 1);
             saveToNvs();
             Serial.printf("[WIFI] Updated credentials for '%s'\n", ssid);
-            connectBest();
             return true;
         }
     }
-
     if (_savedCount >= MAX_WIFI_NETWORKS) {
         Serial.println("[WIFI] Maximum saved networks reached (10).");
         return false;
     }
-
+    memset(&_networks[_savedCount], 0, sizeof(WifiCreds));
     strncpy(_networks[_savedCount].ssid, ssid, sizeof(_networks[_savedCount].ssid) - 1);
     strncpy(_networks[_savedCount].pass, pass ? pass : "", sizeof(_networks[_savedCount].pass) - 1);
     _savedCount++;
     saveToNvs();
-
-    Serial.printf("[WIFI] Stored new network '%s' (Total: %d)\n", ssid, _savedCount);
-    connectBest();
+    Serial.printf("[WIFI] Stored network '%s' (Total: %d)\n", ssid, _savedCount);
     return true;
 }
 
 bool WifiManager::removeNetwork(const char* ssid) {
     if (!ssid) return false;
     int foundIdx = -1;
-
     for (int i = 0; i < _savedCount; i++) {
         if (strcmp(_networks[i].ssid, ssid) == 0) {
             foundIdx = i;
             break;
         }
     }
-
     if (foundIdx < 0) return false;
-
-    for (int i = foundIdx; i < _savedCount - 1; i++) {
-        _networks[i] = _networks[i + 1];
-    }
+    for (int i = foundIdx; i < _savedCount - 1; i++) _networks[i] = _networks[i + 1];
     _savedCount--;
     saveToNvs();
     Serial.printf("[WIFI] Removed network '%s'\n", ssid);
@@ -110,89 +92,137 @@ const WifiCreds* WifiManager::getNetwork(int index) const {
     return nullptr;
 }
 
-bool WifiManager::connectBest() {
-    if (_savedCount == 0) return false;
-
-    WiFi.mode(WIFI_STA);
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);
-    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
-
-    // Fast synchronous scan
-    Serial.println("[WIFI] Scanning for known networks...");
-    int n = WiFi.scanNetworks(false, false, false, 300);
-    int bestSavedIdx = -1;
-    int bestRssi = -120;
-
-    for (int i = 0; i < n; i++) {
-        String foundSsid = WiFi.SSID(i);
-        int32_t foundRssi = WiFi.RSSI(i);
-
-        for (int s = 0; s < _savedCount; s++) {
-            if (foundSsid.equals(_networks[s].ssid)) {
-                if (foundRssi > bestRssi) {
-                    bestRssi = foundRssi;
-                    bestSavedIdx = s;
-                }
-            }
-        }
-    }
-
-    WiFi.scanDelete();
-
-    if (bestSavedIdx >= 0) {
-        Serial.printf("[WIFI] Connecting to '%s' (%d dBm)...\n", _networks[bestSavedIdx].ssid, bestRssi);
-        WiFi.begin(_networks[bestSavedIdx].ssid, _networks[bestSavedIdx].pass);
-        _connecting = true;
-        return true;
-    } else {
-        // Try first saved network as fallback
-        Serial.printf("[WIFI] Trying fallback to '%s'...\n", _networks[0].ssid);
-        WiFi.begin(_networks[0].ssid, _networks[0].pass);
-        _connecting = true;
-        return true;
-    }
+void WifiManager::setPortalActive(bool active) {
+    _portalActive = active;
+    if (active) _phase = PHASE_OFF;  // the portal reconfigures the radio as an access point
 }
 
-void WifiManager::disconnect() {
+void WifiManager::radioOff() {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
-    _connecting = false;
+    _phase = PHASE_OFF;
+}
+
+void WifiManager::startScan() {
+    WiFi.mode(WIFI_STA);
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);   // low TX power: less heat in the enclosed dongle
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    WiFi.scanNetworks(true, false, false, 300);  // async
+    _phase = PHASE_SCANNING;
+    _phaseStart = millis();
+}
+
+void WifiManager::connectNextCandidate() {
+    if (_candIdx >= _candCount) {
+        Serial.println("[WIFI] No saved network reachable this burst");
+        radioOff();
+        _lastBurst = millis();
+        return;
+    }
+    const WifiCreds& n = _networks[_candidates[_candIdx++]];
+    Serial.printf("[WIFI] Joining '%s'...\n", n.ssid);
+    WiFi.begin(n.ssid, n.pass);
+    _phase = PHASE_CONNECTING;
+    _phaseStart = millis();
+}
+
+void WifiManager::update() {
+    WallTicker::applyResults();
+    if (_portalActive) return;
+
+    uint32_t now = millis();
+    bool usbHost = (bool)USB;  // true once a computer has enumerated us
+
+    if (usbHost && !_forceWall) {
+        if (_phase != PHASE_OFF || WiFi.getMode() != WIFI_OFF) {
+            Serial.println("[WIFI] USB host detected: radio off (prices arrive over USB)");
+            radioOff();
+        }
+        _wallMode = false;
+        return;
+    }
+    if (now - _bootMs < WIFI_HOST_GRACE_MS) return;  // give USB a chance to enumerate
+    _wallMode = true;
+    if (_savedCount == 0) return;
+
+    switch (_phase) {
+        case PHASE_OFF:
+            if (_lastBurst == 0 || now - _lastBurst >= WIFI_BURST_PERIOD_MS) startScan();
+            break;
+
+        case PHASE_SCANNING: {
+            int n = WiFi.scanComplete();
+            if (n == WIFI_SCAN_RUNNING) {
+                if (now - _phaseStart > 10000) {
+                    WiFi.scanDelete();
+                    radioOff();
+                    _lastBurst = now;
+                }
+                break;
+            }
+            // Rank saved networks that are in range by signal strength (strongest first)
+            int32_t rssi[MAX_WIFI_NETWORKS];
+            _candCount = 0;
+            for (int s = 0; s < _savedCount; s++) {
+                int32_t best = -1000;
+                for (int i = 0; i < n; i++) {
+                    if (WiFi.SSID(i) == _networks[s].ssid && WiFi.RSSI(i) > best) best = WiFi.RSSI(i);
+                }
+                if (best > -1000) {
+                    int k = _candCount++;
+                    while (k > 0 && rssi[k - 1] < best) {
+                        rssi[k] = rssi[k - 1];
+                        _candidates[k] = _candidates[k - 1];
+                        k--;
+                    }
+                    rssi[k] = best;
+                    _candidates[k] = s;
+                }
+            }
+            WiFi.scanDelete();
+            _candIdx = 0;
+            connectNextCandidate();
+            break;
+        }
+
+        case PHASE_CONNECTING:
+            if (WiFi.status() == WL_CONNECTED) {
+                bool withBalances = _lastBalance == 0 || now - _lastBalance >= WIFI_BALANCE_PERIOD_MS;
+                if (withBalances) _lastBalance = now;
+                Serial.printf("[WIFI] Online via '%s' (%d dBm): fetching%s\n", WiFi.SSID().c_str(),
+                              WiFi.RSSI(), withBalances ? " prices + balances" : " prices");
+                WallTicker::start(withBalances);
+                _phase = PHASE_FETCHING;
+                _phaseStart = now;
+            } else if (now - _phaseStart > 12000) {
+                WiFi.disconnect(true);
+                connectNextCandidate();
+            }
+            break;
+
+        case PHASE_FETCHING:
+            if (!WallTicker::running() || now - _phaseStart > 45000) {
+                radioOff();          // duty cycle: RF only for the few seconds of each burst
+                _lastBurst = now;
+            }
+            break;
+    }
 }
 
 bool WifiManager::isConnected() {
-    return (WiFi.status() == WL_CONNECTED);
-}
-
-String WifiManager::getIp() {
-    if (isConnected()) return WiFi.localIP().toString();
-    return "0.0.0.0";
-}
-
-String WifiManager::getSsid() {
-    if (isConnected()) return WiFi.SSID();
-    return "Disconnected";
+    return WiFi.status() == WL_CONNECTED;
 }
 
 const char* WifiManager::getConnectedSsid() {
     static char ssidBuf[33];
     if (isConnected()) {
-        String s = WiFi.SSID();
-        strncpy(ssidBuf, s.c_str(), sizeof(ssidBuf) - 1);
+        strncpy(ssidBuf, WiFi.SSID().c_str(), sizeof(ssidBuf) - 1);
         ssidBuf[sizeof(ssidBuf) - 1] = '\0';
         return ssidBuf;
     }
-    return "AIRGAP";
+    return _wallMode ? "WALL" : "USB";
 }
 
 int8_t WifiManager::getRssi() {
-    if (isConnected()) return WiFi.RSSI();
-    return 0;
-}
-
-void WifiManager::update() {
-    // Periodic reconnection check every 30 seconds if disconnected
-    if (_savedCount > 0 && !isConnected() && (millis() - _lastCheck > 30000)) {
-        _lastCheck = millis();
-        connectBest();
-    }
+    return isConnected() ? WiFi.RSSI() : 0;
 }

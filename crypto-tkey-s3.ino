@@ -110,6 +110,7 @@ void startSeedGeneration(int wordCount);
 void loadSecurityConfig();
 bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistration);
 void renderCurrentPortfolioCard();
+void showReceiveScreen(const char* symbol, const char* hint);
 
 void launchSetupPortal() {
     vaultPrefs.begin("vault_sec", true);
@@ -118,6 +119,7 @@ void launchSetupPortal() {
     vaultPrefs.end();
 
     deviceState = STATE_SETUP_WALKTHROUGH;
+    if (wifi) wifi->setPortalActive(true);
     portal->begin(wallet, wifi, isProvisioned, setupPwdHash.c_str());
     ui.renderOobeWizard(1, "T-KEY SETUP", "SSID: T-Key-Setup", "GO TO: 192.168.4.1");
     rgb.setMode(LED_MODE_SOFTAP_PULSE);
@@ -230,6 +232,7 @@ void loop() {
             vaultPrefs.end();
 
             portal->stop();
+            if (wifi) wifi->setPortalActive(false);
             rgb.flashRainbow(800);
             ui.renderSuccessBanner("VAULT PROVISIONED", "LAUNCHING KEY");
             delay(1500);
@@ -242,6 +245,10 @@ void loop() {
     }
 
     bool userActive = (ev != BTN_NONE);
+    if (userActive && PowerManager::isDisplaySleeping() && ev != BTN_PANIC_HOLD) {
+        PowerManager::update(true);   // wake only; don't act on a press the user couldn't see
+        ev = BTN_NONE;
+    }
     PowerManager::update(userActive);
 
     handleSerialCommands();
@@ -295,6 +302,15 @@ void loop() {
             break;
         case STATE_AIRGAP_SD_SIGN:
             processAirGapSdSignState(ev);
+            break;
+        case STATE_RECEIVE_QR:
+            if (ev == BTN_SHORT_PRESS || ev == BTN_DOUBLE_CLICK || ev == BTN_LONG_PRESS ||
+                ev == BTN_VERY_LONG_PRESS) {
+                deviceState = STATE_PORTFOLIO_TRACKER;
+                renderCurrentPortfolioCard();
+            } else if (ev == BTN_PANIC_HOLD) {
+                DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
+            }
             break;
         case STATE_DURESS_WIPED:
             delay(100);
@@ -410,6 +426,13 @@ void processPortfolioTrackerState(ButtonEvent ev) {
         const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
         ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
         Serial.println("[NAV] Exited Crypto Hub -> Base Home Screen");
+    } else if (ev == BTN_VERY_LONG_PRESS) {
+        // Hold 2-5 s: receive QR for this coin (public address, no PIN needed)
+        CoinAsset* coin = PortfolioManager::getCurrentCoin();
+        if (coin) {
+            deviceState = STATE_RECEIVE_QR;
+            showReceiveScreen(coin->symbol, "any: back");
+        }
     } else if (ev == BTN_LONG_PRESS) {
         // Long press opens Master PIN Gate to unlock Private Vault!
         PowerManager::setKeepAwake(false);
@@ -520,6 +543,45 @@ void processPinEntryState(ButtonEvent ev) {
     }
 }
 
+// ─── Receive Addresses (QR) ──────────────────────────────────────────────────
+// Explicit list: a coin gets a receive QR only if this device derives an address that
+// is valid on its network. (The registry also tags TAO/INJ/BNB with EVM paths, but
+// their address formats differ, so they are deliberately absent.)
+struct ReceiveRoute { const char* symbol; CryptoCoin source; const char* network; };
+static const ReceiveRoute RECEIVE_ROUTES[] = {
+    {"BTC", COIN_BTC, "Bitcoin"},
+    {"ETH", COIN_ETH, "Ethereum"},
+    {"LINK", COIN_ETH, "ERC-20 (ETH)"}, {"UNI", COIN_ETH, "ERC-20 (ETH)"},
+    {"SHIB", COIN_ETH, "ERC-20 (ETH)"}, {"PEPE", COIN_ETH, "ERC-20 (ETH)"},
+    {"FLOKI", COIN_ETH, "ERC-20 (ETH)"}, {"MOG", COIN_ETH, "ERC-20 (ETH)"},
+    {"TURBO", COIN_ETH, "ERC-20 (ETH)"}, {"NEIRO", COIN_ETH, "ERC-20 (ETH)"},
+    {"POL", COIN_ETH, "Polygon"}, {"ARB", COIN_ETH, "Arbitrum"},
+    {"OP", COIN_ETH, "Optimism"}, {"BRETT", COIN_ETH, "Base"},
+    {"SOL", COIN_SOL, "Solana"},
+    {"BONK", COIN_SOL, "SPL (Solana)"}, {"WIF", COIN_SOL, "SPL (Solana)"},
+    {"POPCAT", COIN_SOL, "SPL (Solana)"}, {"GOAT", COIN_SOL, "SPL (Solana)"},
+    {"DOGE", COIN_DOGE, "Dogecoin"},
+};
+
+void showReceiveScreen(const char* symbol, const char* hint) {
+    const ReceiveRoute* route = nullptr;
+    for (const ReceiveRoute& r : RECEIVE_ROUTES) {
+        if (strcmp(r.symbol, symbol) == 0) route = &r;
+    }
+    const char* addr = (route && wallet) ? wallet->getAddress(route->source) : "";
+    // BIP-173: an all-uppercase bech32 address is valid and encodes in the compact
+    // alphanumeric QR mode (bigger modules, easier scan). Other chains are case-sensitive.
+    char qrText[72];
+    strncpy(qrText, addr, sizeof(qrText) - 1);
+    qrText[sizeof(qrText) - 1] = '\0';
+    if (route && route->source == COIN_BTC) {
+        for (char* c = qrText; *c; c++) *c = toupper(*c);
+    }
+    RgbColor c = RgbStatus::getCoinRgb(symbol);
+    rgb.setCoinColor(c.r, c.g, c.b);
+    ui.renderReceiveScreen(symbol, route ? route->network : "Unsupported", addr, qrText, hint);
+}
+
 // ─── Helper: Unified Vault Coin Display with Dynamic LED & UI Theme Sync ─────
 void showVaultCoinScreen(uint8_t coin) {
     currentViewCoin = (CryptoCoin)coin;
@@ -531,9 +593,8 @@ void showVaultCoinScreen(uint8_t coin) {
     if (coin == COIN_SOL)  { name = "SOLANA";          sym = "SOL (Ed25519)"; lookupSym = "SOL"; }
     if (coin == COIN_DOGE) { name = "DOGECOIN";        sym = "DOGE (Legacy)"; lookupSym = "DOGE"; }
 
-    RgbColor c = RgbStatus::getCoinRgb(lookupSym);
-    rgb.setCoinColor(c.r, c.g, c.b);
-    ui.renderWalletScreen(name, sym, acc ? acc->address : "", acc ? acc->derivationPath : "");
+    (void)name; (void)sym; (void)acc;
+    showReceiveScreen(lookupSym, "tap: next");
 }
 
 // ─── State: Vault Dashboard (Private Derived Addresses Explorer) ────────────
@@ -947,9 +1008,17 @@ void handleSerialCommands() {
         // Any local process can open the CDC port: the PIN is only entered on the device.
         Serial.println("[VAULT] Serial unlock is disabled; enter the PIN on the device.");
 #endif
+    } else if (cmd.equalsIgnoreCase("addrs")) {
+        // Machine-readable public receive addresses for the host companion (balances).
+        // Public data only, cached at seed creation, so this works while locked.
+        for (int i = 0; i < COIN_COUNT; i++) {
+            const WalletAccount* acc = wallet->getAccount((CryptoCoin)i);
+            if (acc && acc->address[0]) Serial.printf("ADDR %s %s\n", acc->symbol, acc->address);
+        }
+        Serial.println("ADDR END");
     } else if (cmd.equalsIgnoreCase("addresses")) {
-        if (!wallet->isUnlocked()) {
-            Serial.println("[VAULT] 🔒 Error: Vault is LOCKED. Unlock first with 'unlock <PIN>' or via device screen.");
+        if (!wallet->hasSeed()) {
+            Serial.println("[VAULT] No wallet seed yet.");
         } else {
             Serial.println("\n--- Genuine Derived Addresses (BIP-32 / BIP-84 / EIP-55) ---");
             for (int i = 0; i < COIN_COUNT; i++) {
@@ -1157,6 +1226,11 @@ void handleSerialCommands() {
         p.clear();
         p.end();
         Serial.println("[TEST] wallet_seed namespace erased; reboot for a clean state.");
+#endif
+#ifdef TKEY_TEST_SERIAL_TOUCH
+    } else if (cmd.equalsIgnoreCase("wifitest")) {
+        wifi->forceWallMode(true);
+        Serial.println("[TEST] Wall-mode Wi-Fi burst forced while on USB");
 #endif
     } else if (cmd.startsWith("setpin ")) {
         // PIN changes go through the password-protected setup portal, never an open serial port.

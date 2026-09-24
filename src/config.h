@@ -74,6 +74,7 @@ enum DeviceState {
     STATE_FIDO_AUTH_PROMPT,    // WebAuthn / Passkey user presence prompt
     STATE_CRYPTO_SIGN_PROMPT,  // Clear-signing transaction verification (WYSIWYS)
     STATE_AIRGAP_SD_SIGN,      // MicroSD PSBT air-gap signer
+    STATE_RECEIVE_QR,          // Receive address + QR code (public, no PIN)
     STATE_DURESS_WIPED         // Decoy system crash after zeroization
 };
 

@@ -109,6 +109,7 @@ _open_prices = {}          # { "BTC": open_price } for 24h change calc
 # ─── Serial port reference (set by main thread) ───────────────────────────────
 _serial_port = None
 _serial_lock = threading.Lock()
+_serial_failed = threading.Event()   # set on any write error -> live loop reconnects
 _last_push   = {}          # { "BTC": last_pushed_price } — skip if unchanged
 
 
@@ -119,7 +120,11 @@ def _safe_serial_write(line: str):
             try:
                 _serial_port.write(line.encode())
             except Exception as e:
-                print(f"[TRACKER] Serial write error: {e}", file=sys.stderr)
+                # A dead link must end the live loop so it reconnects; swallowing this
+                # error used to freeze the device's prices forever.
+                if not _serial_failed.is_set():
+                    print(f"[TRACKER] Serial write error: {e} -> reconnecting", file=sys.stderr)
+                _serial_failed.set()
 
 
 def _push_price(sym: str, price: float, chg: float):
@@ -321,25 +326,62 @@ def fetch_sol_balance(address):
         return 0.0
 
 
+def fetch_doge_balance(address):
+    if not address or not address.startswith("D") or len(address) < 26:
+        return 0.0
+    url = f"https://api.blockcypher.com/v1/doge/main/addrs/{address}/balance"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as res:
+            data = json.loads(res.read().decode())
+            return data.get("final_balance", 0) / 1e8
+    except Exception as e:
+        print(f"[TRACKER] DOGE balance error: {e}", file=sys.stderr)
+        return 0.0
+
+
 def query_device_addresses(ser):
-    """Reads derived addresses from the device if unlocked."""
+    """Public receive addresses via the machine-readable `addrs` command
+    ("ADDR <SYM> <address>" ... "ADDR END"); works while the vault is locked."""
     addresses = {}
     try:
-        ser.reset_input_buffer()
-        ser.write(b"addresses\n")
-        time.sleep(0.3)
-        raw = ser.read(2048).decode(errors="ignore")
-        for line in raw.splitlines():
-            line = line.strip()
-            if line.startswith("bc1"):
-                addresses["BTC"] = line
-            elif line.startswith("0x") and len(line) == 42:
-                addresses["ETH"] = line
-            elif len(line) >= 32 and not line.startswith("bc1") and not line.startswith("0x"):
-                addresses["SOL"] = line
+        with _serial_lock:
+            ser.reset_input_buffer()
+            ser.write(b"addrs\n")
+        deadline = time.time() + 2.0
+        buf = ""
+        while time.time() < deadline and "ADDR END" not in buf:
+            buf += ser.read(ser.in_waiting or 1).decode(errors="ignore")
+        for line in buf.splitlines():
+            parts = line.strip().split()
+            if len(parts) == 3 and parts[0] == "ADDR":
+                addresses[parts[1].upper()] = parts[2]
     except Exception as e:
         print(f"[TRACKER] Address query error: {e}", file=sys.stderr)
     return addresses
+
+
+BALANCE_FETCHERS = [
+    # (device address key, balance symbol, fetcher, decimals)
+    ("BTC", "BTC", lambda a: fetch_btc_balance(a), 8),
+    ("ETH", "ETH", lambda a: fetch_eth_balance(a), 6),
+    ("ETH", "PEPE", lambda a: fetch_pepe_balance(a), 2),
+    ("SOL", "SOL", lambda a: fetch_sol_balance(a), 6),
+    ("DOGE", "DOGE", lambda a: fetch_doge_balance(a), 4),
+]
+
+
+def refresh_balances(ser):
+    addrs = query_device_addresses(ser)
+    if not addrs:
+        print("[TRACKER] No wallet addresses on device yet (create a wallet to track balances)")
+        return
+    for key, sym, fetch, dec in BALANCE_FETCHERS:
+        if key in addrs:
+            bal = fetch(addrs[key]) or 0.0
+            _safe_serial_write(f"setbal {sym} {bal:.{dec}f}\n")
+            time.sleep(0.05)
+    print(f"[TRACKER] Balances refreshed for {sorted(addrs)}")
 
 
 # ─── Main Sync Cycle ──────────────────────────────────────────────────────────
@@ -407,29 +449,7 @@ def sync_cycle(port, ws_active=False):
         print(f"[TRACKER] ✅ Full registry synced ({len(synced_coins)} coins)")
 
     # ── 3. On-chain balances ──────────────────────────────────────────────────
-    addrs = query_device_addresses(ser)
-    if addrs:
-        print(f"[TRACKER] 🔍 Addresses: {list(addrs.keys())}")
-        if "BTC" in addrs:
-            bal = fetch_btc_balance(addrs["BTC"]) or 0.0
-            try:
-                ser.write(f"setbal BTC {bal:.8f}\n".encode())
-            except (TypeError, ValueError):
-                pass
-            time.sleep(0.05)
-        if "ETH" in addrs:
-            bal = fetch_eth_balance(addrs["ETH"]) or 0.0
-            try:
-                ser.write(f"setbal ETH {bal:.6f}\n".encode())
-            except (TypeError, ValueError):
-                pass
-            time.sleep(0.05)
-            bal = fetch_pepe_balance(addrs["ETH"]) or 0.0
-            try:
-                ser.write(f"setbal PEPE {bal:.2f}\n".encode())
-            except (TypeError, ValueError):
-                pass
-            time.sleep(0.05)
+    refresh_balances(ser)
 
     with _serial_lock:
         _serial_port = None
@@ -464,6 +484,8 @@ def live_push_loop(port, coingecko_interval=30, balance_interval=300):
     time.sleep(0.4)
     with _serial_lock:
         _serial_port = ser
+    _serial_failed.clear()
+    _last_push.clear()          # re-send every price to the freshly connected device
 
     last_coingecko = 0
     last_balance   = 0
@@ -503,26 +525,10 @@ def live_push_loop(port, coingecko_interval=30, balance_interval=300):
             # ── Balance refresh ───────────────────────────────────────────────
             if now - last_balance >= balance_interval:
                 last_balance = now
-                addrs = query_device_addresses(ser)
-                if addrs:
-                    if "BTC" in addrs:
-                        bal = fetch_btc_balance(addrs["BTC"]) or 0.0
-                        try:
-                            ser.write(f"setbal BTC {bal:.8f}\n".encode())
-                        except Exception:
-                            pass
-                    if "ETH" in addrs:
-                        bal = fetch_eth_balance(addrs["ETH"]) or 0.0
-                        try:
-                            ser.write(f"setbal ETH {bal:.6f}\n".encode())
-                        except Exception:
-                            pass
-                        bal = fetch_pepe_balance(addrs["ETH"]) or 0.0
-                        try:
-                            ser.write(f"setbal PEPE {bal:.2f}\n".encode())
-                        except Exception:
-                            pass
+                refresh_balances(ser)
 
+            if _serial_failed.is_set():
+                raise serial.SerialException("device disconnected")
             time.sleep(1.0)
 
     except (serial.SerialException, OSError) as e:
@@ -537,26 +543,15 @@ def live_push_loop(port, coingecko_interval=30, balance_interval=300):
 
 
 def find_device_port():
-    candidates = glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*")
-    for port in candidates:
-        try:
-            s = serial.Serial()
-            s.port = port
-            s.baudrate = 115200
-            s.timeout = 0.5
-            s.rts = False
-            s.dtr = True
-            s.open()
-            s.write(b"status\n")
-            time.sleep(0.15)
-            resp = s.read(256).decode(errors="ignore")
-            s.close()
-            if "Uptime:" in resp or "Vault:" in resp:
-                return port
-        except Exception:
-            continue
-    if candidates:
-        return candidates[0]
+    """The Crypto TKey S3 CDC port by USB VID:PID 303a:1001 (the port name moves
+    between ttyACM0/1 across re-enumeration; other serial devices are left alone)."""
+    try:
+        from serial.tools import list_ports
+        for p in list_ports.comports():
+            if p.vid == 0x303A and p.pid == 0x1001:
+                return p.device
+    except Exception as e:
+        print(f"[TRACKER] Port scan error: {e}", file=sys.stderr)
     return None
 
 

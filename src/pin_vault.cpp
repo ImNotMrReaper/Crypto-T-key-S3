@@ -1,3 +1,4 @@
+#include "crypto_p256.h"
 #include "pin_vault.h"
 #include "config.h"
 #include <Preferences.h>
@@ -33,7 +34,7 @@ void PinVault::begin() {
     if (prefs.getBytesLength("pin_salt") == sizeof(s_salt)) {
         prefs.getBytes("pin_salt", s_salt, sizeof(s_salt));
     } else {
-        esp_fill_random(s_salt, sizeof(s_salt));
+        CryptoP256::secureRandom(s_salt, sizeof(s_salt));
         prefs.putBytes("pin_salt", s_salt, sizeof(s_salt));
     }
     s_fails = prefs.getUChar("pin_fails", 0);

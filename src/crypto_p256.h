@@ -23,6 +23,9 @@ public:
     bool begin();
     
     // Entropy & Key Generation
+    // True-random bytes: the ESP32-S3 RNG is only a PRNG while the radio is off, so
+    // this switches on the SAR-ADC noise source (bootloader_random) around each draw.
+    static void secureRandom(uint8_t* out, size_t len);
     bool getRandomBytes(uint8_t* out, size_t len);
     bool generateKeypair(uint8_t* privKeyOut, uint8_t* pubKeyOutRaw); // pubKeyOutRaw is 64 bytes (X || Y)
 

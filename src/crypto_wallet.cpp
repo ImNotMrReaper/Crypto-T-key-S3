@@ -2,6 +2,7 @@
  * crypto_wallet.cpp — Universal Multi-Currency Embedded Crypto Vault Implementation
  */
 
+#include "crypto_p256.h"
 #include "crypto_wallet.h"
 #include "seed_gen.h"
 #include <Preferences.h>
@@ -22,7 +23,7 @@ static bool walletDeviceKey(uint8_t key[32]) {
     prefs.begin("wallet_seed", false);
     bool ok = prefs.getBytesLength("dev_key") == 32 && prefs.getBytes("dev_key", key, 32) == 32;
     if (!ok) {
-        esp_fill_random(key, 32);
+        CryptoP256::secureRandom(key, 32);
         ok = prefs.putBytes("dev_key", key, 32) == 32;
     }
     prefs.end();
@@ -41,7 +42,7 @@ struct CpuBoost {
 #include <Ed25519.h>
 
 static int rng_wrapper(uint8_t *dest, unsigned size) {
-    esp_fill_random(dest, size);
+    CryptoP256::secureRandom(dest, size);
     return 1;
 }
 
@@ -115,7 +116,7 @@ bool CryptoWallet::storeSeed() {
     if (!walletDeviceKey(key)) return false;
     size_t n = strlen(_mnemonic);
     uint8_t blob[12 + sizeof(_mnemonic) + 16];
-    esp_fill_random(blob, 12);
+    CryptoP256::secureRandom(blob, 12);
     mbedtls_gcm_context gcm;
     mbedtls_gcm_init(&gcm);
     int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256);
@@ -298,6 +299,9 @@ void CryptoWallet::publishAddresses() {
 
     CoinAsset* solCoin = CryptoCoinRegistry::getCoin(COIN_ID_SOL);
     if (solCoin) strncpy(solCoin->address, _accounts[COIN_SOL].address, sizeof(solCoin->address) - 1);
+
+    CoinAsset* dogeCoin = CryptoCoinRegistry::getCoin(COIN_ID_DOGE);
+    if (dogeCoin) strncpy(dogeCoin->address, _accounts[COIN_DOGE].address, sizeof(dogeCoin->address) - 1);
 
 }
 

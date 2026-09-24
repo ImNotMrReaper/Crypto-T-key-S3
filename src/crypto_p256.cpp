@@ -1,6 +1,8 @@
 #include "crypto_p256.h"
 #include <Preferences.h>
 #include <esp_random.h>
+#include <esp_wifi.h>
+#include <bootloader_random.h>
 #include <mbedtls/md.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/platform_util.h>
@@ -63,9 +65,18 @@ bool CryptoP256::rotateMasterSecret() {
     return ok;
 }
 
+void CryptoP256::secureRandom(uint8_t* out, size_t len) {
+    if (!out || len == 0) return;
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    bool rfOn = esp_wifi_get_mode(&mode) == ESP_OK && mode != WIFI_MODE_NULL;
+    if (!rfOn) bootloader_random_enable();   // must not overlap RF use
+    esp_fill_random(out, len);
+    if (!rfOn) bootloader_random_disable();
+}
+
 bool CryptoP256::getRandomBytes(uint8_t* out, size_t len) {
     if (!out || len == 0) return false;
-    esp_fill_random(out, len);
+    secureRandom(out, len);
     return true;
 }
 
@@ -166,7 +177,7 @@ bool CryptoP256::verifyCredentialIdRaw(const uint8_t* rpHash32, const uint8_t* c
 }
 
 static int f_rng(void* p_rng, unsigned char* output, size_t output_len) {
-    esp_fill_random(output, output_len);
+    CryptoP256::secureRandom(output, output_len);
     return 0;
 }
 

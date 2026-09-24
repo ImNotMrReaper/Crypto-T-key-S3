@@ -9,6 +9,7 @@
  */
 
 #include "ui_engine.h"
+#include <qrcode.h>   // ESP-IDF espressif__qrcode component
 #include "rgb_status.h"
 
 uint16_t getCoinColor565(const char* symbol) {
@@ -352,6 +353,89 @@ void UiEngine::renderCryptoSignPrompt(const char* chain, const char* recipient, 
     _sprite->drawFastHLine(0, 66, 36, chainColor);
     drawFooter("[●] HOLD: SIGN  [▲] EXIT", 0, 0.0f);
 
+    _sprite->pushSprite(0, 0);
+}
+
+// esp_qrcode_generate() renders through a callback; these carry the target box.
+static TFT_eSprite* s_qrSprite = nullptr;
+static int s_qrBox = 80;
+static bool s_qrDrawn = false;
+
+static void drawQrToSprite(esp_qrcode_handle_t qr) {
+    int size = esp_qrcode_get_size(qr);
+    int scale = s_qrBox / (size + 4);          // keep >= 2 modules of white quiet zone
+    if (scale < 1) scale = 1;
+    int px = size * scale;
+    int off = (s_qrBox - px) / 2;
+    s_qrSprite->fillRect(0, 0, s_qrBox, s_qrBox, TFT_WHITE);
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            if (esp_qrcode_get_module(qr, x, y)) {
+                s_qrSprite->fillRect(off + x * scale, off + y * scale, scale, scale, TFT_BLACK);
+            }
+        }
+    }
+    s_qrDrawn = true;
+}
+
+void UiEngine::renderReceiveScreen(const char* symbol, const char* network, const char* address,
+                                   const char* qrText, const char* hint) {
+    if (!_sprite) return;
+    _sprite->fillSprite(COLOR_BG);
+    uint16_t coinColor = getCoinColor565(symbol);
+
+    bool haveAddr = address && address[0];
+    if (haveAddr) {
+        s_qrSprite = _sprite;
+        s_qrBox = DISP_H;  // 80x80 white square on the left
+        s_qrDrawn = false;
+        esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+        cfg.display_func = drawQrToSprite;
+        cfg.max_qrcode_version = 6;
+        cfg.qrcode_ecc_level = ESP_QRCODE_ECC_LOW;  // smallest code => largest modules
+        esp_qrcode_generate(&cfg, qrText && qrText[0] ? qrText : address);
+    }
+    if (!haveAddr || !s_qrDrawn) {
+        _sprite->drawRect(0, 0, DISP_H, DISP_H, 0x4208);
+        _sprite->setTextDatum(MC_DATUM);
+        _sprite->setTextColor(0x8410, COLOR_BG);
+        _sprite->drawString(haveAddr ? "QR ERROR" : "NO ADDRESS", DISP_H / 2, DISP_H / 2, 1);
+    }
+
+    // Right column: symbol pill, network, wrapped address, hint
+    const int x0 = DISP_H + 3;
+    const int colW = DISP_W - x0 - 1;
+    _sprite->fillRoundRect(x0, 1, 40, 11, 2, coinColor);
+    _sprite->setTextDatum(MC_DATUM);
+    _sprite->setTextColor(0x0000, coinColor);
+    _sprite->drawString(symbol, x0 + 20, 6, 1);
+
+    _sprite->setTextDatum(TL_DATUM);
+    _sprite->setTextColor(coinColor, COLOR_BG);
+    char net[14];
+    strncpy(net, network ? network : "", sizeof(net) - 1);
+    net[sizeof(net) - 1] = '\0';
+    _sprite->drawString(net, x0, 14, 1);
+
+    _sprite->setTextColor(0xFFFF, COLOR_BG);
+    const int perLine = colW / 6;  // font 1 is 6 px wide
+    if (haveAddr) {
+        size_t n = strlen(address);
+        int y = 25;
+        for (size_t i = 0; i < n && y <= 58; i += perLine, y += 10) {
+            char line[20];
+            size_t k = (n - i < (size_t)perLine) ? n - i : (size_t)perLine;
+            memcpy(line, address + i, k);
+            line[k] = '\0';
+            _sprite->drawString(line, x0, y, 1);
+        }
+    } else {
+        _sprite->drawString("Not on this", x0, 30, 1);
+        _sprite->drawString("device", x0, 40, 1);
+    }
+
+    _sprite->setTextColor(0x8410, COLOR_BG);
+    _sprite->drawString(hint ? hint : "", x0, 70, 1);
     _sprite->pushSprite(0, 0);
 }
 

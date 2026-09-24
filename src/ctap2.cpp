@@ -1,3 +1,4 @@
+#include "crypto_p256.h"
 #include "ctap2.h"
 #include "ctaphid.h"
 #include <string.h>
