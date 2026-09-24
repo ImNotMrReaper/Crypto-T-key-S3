@@ -7,6 +7,7 @@
  */
 
 #include "rgb_status.h"
+#include "ui_theme.h"
 
 void RgbStatus::begin(uint8_t pinData, uint8_t pinClk) {
     _pinData = pinData;
@@ -79,68 +80,25 @@ RgbColor RgbStatus::wheel(uint8_t wheelPos) {
     return { (uint8_t)(wheelPos * 3), (uint8_t)(255 - wheelPos * 3), 0 };
 }
 
-RgbColor RgbStatus::getCoinRgb(const char* symbol) {
-    if (!symbol) return { 0, 229, 255 };
-
-    // Extract base symbol token up to first space, '(', or '/'
-    char sym[12];
+const CatalogCoin* RgbStatus::findCoin(const char* symbol) {
+    if (!symbol) return nullptr;
+    char sym[12];   // base symbol up to the first space, '(' or '/'
     size_t i = 0;
     while (symbol[i] && symbol[i] != ' ' && symbol[i] != '(' && symbol[i] != '/' && i < sizeof(sym) - 1) {
         sym[i] = toupper(symbol[i]);
         i++;
     }
     sym[i] = '\0';
+    for (int k = 0; k < CATALOG_COUNT; k++) {
+        if (strcmp(CATALOG[k].symbol, sym) == 0) return &CATALOG[k];
+    }
+    return nullptr;
+}
 
-    // ── CRYPTO (32 Assets) ────────────────────────────────────────────────────
-    // Authentic brand colors verified with wide perceptual distance and zero collisions
-    if (strcmp(sym, "BTC")   == 0) return { 247, 147,  26 }; // #F7931A Bitcoin Classic Orange
-    if (strcmp(sym, "ETH")   == 0) return {  98, 126, 234 }; // #627EEA Ethereum Indigo
-    if (strcmp(sym, "SOL")   == 0) return {  20, 241, 149 }; // #14F195 Solana Neon Teal-Green
-    if (strcmp(sym, "BNB")   == 0) return { 243, 186,  47 }; // #F3BA2F Binance Canary Gold
-    if (strcmp(sym, "XRP")   == 0) return {   0, 120, 230 }; // #0078E6 Ripple / XRP Cobalt Blue
-    if (strcmp(sym, "ADA")   == 0) return {   0,  45, 160 }; // #002DA0 Cardano Deep Blue
-    if (strcmp(sym, "AVAX")  == 0) return { 232,  65,  66 }; // #E84142 Avalanche Crimson
-    if (strcmp(sym, "DOT")   == 0) return { 230,   0, 122 }; // #E6007A Polkadot Hot Pink
-    if (strcmp(sym, "LINK")  == 0) return {  43, 110, 245 }; // #2B6EF5 Chainlink Blue
-    if (strcmp(sym, "LTC")   == 0) return { 175, 180, 185 }; // #AFB4B9 Litecoin Silver
-    if (strcmp(sym, "BCH")   == 0) return {  10, 193, 142 }; // #0AC18E Bitcoin Cash Emerald Green
-    if (strcmp(sym, "ATOM")  == 0) return {  60,  65, 145 }; // #3C4191 Cosmos Deep Violet
-    if (strcmp(sym, "POL")   == 0) return { 130,  71, 229 }; // #8247E5 Polygon Vivid Violet
-    if (strcmp(sym, "TRX")   == 0) return { 210,  15,  15 }; // #D20F0F TRON Crimson Red
-    if (strcmp(sym, "NEAR")  == 0) return {   0, 236, 151 }; // #00EC97 NEAR Electric Lime
-    if (strcmp(sym, "SUI")   == 0) return {  77, 162, 255 }; // #4DA2FF Sui Water Blue
-    if (strcmp(sym, "APT")   == 0) return {  45, 216, 167 }; // #2DD8A7 Aptos Mint
-    if (strcmp(sym, "TON")   == 0) return {  40, 180, 245 }; // #28B4F5 TON Telegram Sky Blue
-    if (strcmp(sym, "XLM")   == 0) return {  15, 135, 195 }; // #0F87C3 Stellar Deep Steel Blue
-    if (strcmp(sym, "ALGO")  == 0) return { 100, 180, 160 }; // #64B4A0 Algorand Sage
-    if (strcmp(sym, "HBAR")  == 0) return {   0, 160, 175 }; // #00A0AF Hedera Dark Teal
-    if (strcmp(sym, "VET")   == 0) return {  32, 205, 250 }; // #20CDFA VeChain Bright Aqua
-    if (strcmp(sym, "FIL")   == 0) return {   0,  70, 210 }; // #0046D2 Filecoin Deep Blue
-    if (strcmp(sym, "ICP")   == 0) return { 150, 110, 229 }; // #966EE5 ICP Mid-Gradient Purple
-    if (strcmp(sym, "TAO")   == 0) return { 225, 225, 230 }; // #E1E1E6 Bittensor Platinum White
-    if (strcmp(sym, "INJ")   == 0) return {   0, 245, 255 }; // #00F5FF Injective Electric Cyan
-    if (strcmp(sym, "ARB")   == 0) return {  18, 120, 240 }; // #1278F0 Arbitrum Ocean Blue
-    if (strcmp(sym, "OP")    == 0) return { 255,   4,  32 }; // #FF0420 Optimism Bright Scarlet
-    if (strcmp(sym, "KAS")   == 0) return {  73, 234, 203 }; // #49EACB Kaspa Turquoise
-    if (strcmp(sym, "XMR")   == 0) return { 255, 102,   0 }; // #FF6600 Monero Flame Orange
-    if (strcmp(sym, "EGLD")  == 0) return {  35, 247, 221 }; // #23F7DD MultiversX Neon Cyan
-    if (strcmp(sym, "UNI")   == 0) return { 255,   4, 180 }; // #FF04B4 Uniswap Hot Unicorn Pink
-
-    // ── MEME COINS (12 Assets) ────────────────────────────────────────────────
-    if (strcmp(sym, "DOGE")   == 0) return { 205, 165,  40 }; // #CDA528 Dogecoin Warm Golden Sand
-    if (strcmp(sym, "SHIB")   == 0) return { 225,  75,   0 }; // #E14B00 Shiba Inu Coat Red-Orange
-    if (strcmp(sym, "PEPE")   == 0) return {   0, 200,  50 }; // #00C832 Pepe Frog Green
-    if (strcmp(sym, "BONK")   == 0) return { 255, 140,   0 }; // #FF8C00 Bonk Tangerine
-    if (strcmp(sym, "FLOKI")  == 0) return { 215, 130,  15 }; // #D7820F Floki Viking Bronze
-    if (strcmp(sym, "WIF")    == 0) return { 201, 122,  86 }; // #C97A56 dogwifhat Beanie Tan
-    if (strcmp(sym, "BRETT")  == 0) return {   0,  82, 255 }; // #0052FF Brett Base Royal Blue
-    if (strcmp(sym, "MOG")    == 0) return { 176,  38, 255 }; // #B026FF Mog Electric Neon Violet
-    if (strcmp(sym, "TURBO")  == 0) return { 245,  50,   0 }; // #F53200 Turbo Fire Red
-    if (strcmp(sym, "POPCAT") == 0) return { 255, 128, 171 }; // #FF80AB Popcat Pastel Pink
-    if (strcmp(sym, "NEIRO")  == 0) return { 255, 200, 130 }; // #FFC882 Neiro Caramel Cream
-    if (strcmp(sym, "GOAT")   == 0) return { 139, 195,  74 }; // #8BC34A Goatseus Sage Green
-
-    return { 0, 229, 255 }; // Cyan fallback
+RgbColor RgbStatus::getCoinRgb(const char* symbol) {
+    const CatalogCoin* c = findCoin(symbol);
+    if (!c) return { 0, 229, 255 };
+    return { c->r, c->g, c->b };
 }
 
 void RgbStatus::setCoinColor(uint8_t r, uint8_t g, uint8_t b) {
@@ -212,25 +170,26 @@ void RgbStatus::update() {
     if (now - _lastUpdate < 20) return; // 50 Hz smooth refresh
     _lastUpdate = now;
 
+    // Price-tick flash rides on top of the home and coin looks
+    if (_tickDur && now - _tickStart < _tickDur && (_currentMode == LED_MODE_HOME || _currentMode == LED_MODE_COIN)) {
+        float k = 1.0f - (float)(now - _tickStart) / _tickDur;   // fast attack, linear decay
+        emit(_tickR, _tickG, _tickB, _tickLevel * k + 0.08f);
+        return;
+    }
+
     switch (_currentMode) {
         case LED_MODE_SOLID_AMBER:
             // Crisp warm amber / gold (Locked / PIN entry)
             setPixel(255, 130, 0, 4);
             break;
 
-        case LED_MODE_BREATHE_CYAN: {
-            // Smooth Antigravity Cyan breathing effect
-            if (_direction) {
-                _step += 4;
-                if (_step >= 220) _direction = false;
-            } else {
-                if (_step > 20) _step -= 4;
-                else _direction = true;
-            }
-            uint8_t val = (uint8_t)_step;
-            setPixel(0, val, val, 4);
+        case LED_MODE_HOME:
+            renderHome(now);
             break;
-        }
+
+        case LED_MODE_COIN:
+            renderCoin(now);
+            break;
 
         case LED_MODE_BREATHE_GREEN: {
             // Smooth emerald green breathing for Passkey Hub Ready state
@@ -351,3 +310,140 @@ void RgbStatus::update() {
     }
 }
 
+
+// ─── Home look & chain rhythms ───────────────────────────────────────────────
+
+// Perceptual output: stretch the colour to full saturation brightness (dim brand colours such
+// as navy would otherwise vanish), then apply level² so fades look even to the eye.
+void RgbStatus::emit(uint8_t r, uint8_t g, uint8_t b, float level) {
+    if (level < 0) level = 0;
+    if (level > 1) level = 1;
+    uint8_t mx = max(r, max(g, b));
+    if (mx == 0) { setPixel(0, 0, 0, 0); return; }
+    float k = (255.0f / mx) * level * level;
+    setPixel((uint8_t)(r * k), (uint8_t)(g * k), (uint8_t)(b * k), 4);
+}
+
+void RgbStatus::renderHome(uint32_t now) {
+    switch (homeTheme.fx) {
+        case HOME_FX_SOLID:
+            emit(homeTheme.r, homeTheme.g, homeTheme.b, 0.8f);
+            break;
+        case HOME_FX_RAINBOW: {
+            RgbColor c = wheel((uint8_t)(now / 24));
+            emit(c.r, c.g, c.b, 0.8f);
+            break;
+        }
+        case HOME_FX_BREATHE:
+        default: {
+            float s = 0.5f - 0.5f * cosf((now % 4000) * (2 * PI / 4000.0f));
+            emit(homeTheme.r, homeTheme.g, homeTheme.b, 0.25f + 0.75f * s);
+            break;
+        }
+    }
+}
+
+void RgbStatus::setCoin(const char* symbol) {
+    const CatalogCoin* c = findCoin(symbol);
+    if (!c) {
+        RgbColor f = getCoinRgb(symbol);
+        setCoinColor(f.r, f.g, f.b);
+        return;
+    }
+    if (_currentMode == LED_MODE_COIN && _coin == c) return;   // keep the rhythm's phase
+    _coin = c;
+    _coinStart = millis();
+    setMode(LED_MODE_COIN);
+}
+
+void RgbStatus::priceTick(float pctMove) {
+    uint32_t now = millis();
+    if (pctMove == 0 || now - _lastTick < 400) return;   // don't strobe on bursts of updates
+    _lastTick = now;
+    float m = fabsf(pctMove);
+    if (pctMove > 0) { _tickR = 0; _tickG = 255; _tickB = 90; }
+    else             { _tickR = 255; _tickG = 30; _tickB = 30; }
+    _tickLevel = 0.55f + min(m, 2.0f) * 0.225f;          // 0.55 .. 1.0
+    _tickDur = 140 + (uint32_t)(min(m, 3.0f) * 90.0f);   // 140 .. 410 ms
+    _tickStart = now;
+}
+
+// Visible period from the chain's block time: log-scaled 250 ms .. 10 min -> 0.7 .. 4.2 s,
+// so Bitcoin beats slowly, Ethereum breathes, Solana shimmers.
+static uint32_t rhythmPeriod(uint32_t blockMs) {
+    float x = (logf((float)max<uint32_t>(blockMs, 250)) - logf(250.0f)) / (logf(600000.0f) - logf(250.0f));
+    if (x > 1) x = 1;
+    return 700 + (uint32_t)(x * 3500.0f);
+}
+
+static inline uint32_t hash32(uint32_t x) {
+    x ^= x >> 16; x *= 0x7feb352d; x ^= x >> 15; x *= 0x846ca68b; x ^= x >> 16;
+    return x;
+}
+
+void RgbStatus::renderCoin(uint32_t now) {
+    if (!_coin) { setPixel(0, 0, 0, 0); return; }
+    const CatalogCoin* c = _coin;
+    uint32_t P = rhythmPeriod(c->blockMs);
+    uint32_t t = now - _coinStart;
+    uint32_t ph = t % P;
+    float u = (float)ph / P;
+    uint8_t r = c->r, g = c->g, b = c->b;
+    float level;
+
+    switch (c->pattern) {
+        case LEDP_POW: {
+            // Mining: a dim ember flickering with hash attempts, then a "block found" double beat
+            float ember = 0.3f + ((hash32(t / 60 + (uint32_t)(uintptr_t)c) & 0xFF) / 255.0f) * 0.14f;   // visible after level²
+            // lub (0..260 ms) and dub (330..560 ms): quick attack, slower decay
+            float beat = 0;
+            if (ph < 40) beat = ph / 40.0f;
+            else if (ph < 260) beat = 1.0f - (ph - 40) / 220.0f;
+            else if (ph >= 330 && ph < 360) beat = 0.8f * (ph - 330) / 30.0f;
+            else if (ph >= 360 && ph < 560) beat = 0.8f * (1.0f - (ph - 360) / 200.0f);
+            level = max(ember, beat);
+            break;
+        }
+        case LEDP_SLOT: {
+            // Proof-of-stake slots: steady breathing that drifts between the two brand colours
+            float s = 0.5f - 0.5f * cosf(u * 2 * PI);
+            level = 0.2f + 0.8f * s;
+            float mix = 0.5f - 0.5f * cosf(((t % (2 * P)) / (float)(2 * P)) * 2 * PI);
+            r = r + (int)((c->r2 - r) * mix); g = g + (int)((c->g2 - g) * mix); b = b + (int)((c->b2 - b) * mix);
+            break;
+        }
+        case LEDP_LEDGER: {
+            // Consensus rounds: three quick rising pulses, then rest
+            level = 0.15f;
+            for (int k = 0; k < 3; k++) {
+                int32_t d = (int32_t)ph - k * 130;
+                if (d >= 0 && d < 110) level = max(level, (0.5f + 0.25f * k) * (1.0f - d / 110.0f));
+            }
+            break;
+        }
+        case LEDP_SHIMMER: {
+            // Fast chains: quick crossfade between both colours with a light ripple
+            float mix = u < 0.5f ? u * 2 : 2 - u * 2;
+            r = r + (int)((c->r2 - r) * mix); g = g + (int)((c->g2 - g) * mix); b = b + (int)((c->b2 - b) * mix);
+            level = 0.6f + 0.4f * (0.5f - 0.5f * cosf(u * 4 * PI));
+            break;
+        }
+        case LEDP_STEADY:
+        default:
+            // Stablecoins: pegged, so nearly constant
+            level = 0.7f + 0.05f * sinf((t % 6000) * (2 * PI / 6000.0f));
+            break;
+    }
+
+    if (c->category == CAT_MEME) {
+        // Meme sparkle: short bright pops toward white at irregular intervals
+        uint32_t slot = t / 900;
+        uint32_t at = hash32(slot ^ 0x5eed) % 700;
+        uint32_t d = t % 900;
+        if ((hash32(slot) & 3) != 0 && d >= at && d < at + 70) {
+            r = r + (255 - r) * 2 / 5; g = g + (255 - g) * 2 / 5; b = b + (255 - b) * 2 / 5;
+            level = 1.0f;
+        }
+    }
+    emit(r, g, b, level);
+}

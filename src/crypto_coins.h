@@ -51,6 +51,8 @@ public:
         return !hasLivePrice(c) || millis() - c->priceUpdatedMs > PRICE_STALE_MS;
     }
     static float getTotalPortfolioValueUsd();
+    // Called on every live price update with the move since the previous price (in %)
+    static void (*onPriceTick)(const CoinAsset* coin, float pctMove);
 
     // Persistence (NVS "portfolio_v2", keyed by symbol)
     static void savePreferences();

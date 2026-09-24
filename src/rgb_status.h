@@ -10,18 +10,20 @@
 
 #include <Arduino.h>
 #include "config.h"
+#include "coin_catalog.h"
 
 enum LedMode {
     LED_MODE_OFF,
     LED_MODE_SOLID_AMBER,      // Locked / PIN entry
-    LED_MODE_BREATHE_CYAN,     // Idle Dashboard / Ready
+    LED_MODE_HOME,             // Idle home: the user's theme colour + effect (setup page)
     LED_MODE_BREATHE_GREEN,    // Passkey Hub Armed / Ready
     LED_MODE_PULSE_GREEN,      // User Presence Auth / Sign Request
     LED_MODE_FLASH_GREEN_OK,   // Action Confirmed
     LED_MODE_SOLID_BLUE,       // Air-Gapped SD Signer
     LED_MODE_PULSE_PURPLE,     // BLE Companion Mode
     LED_MODE_STROBE_RED,       // Duress Wipe / Emergency
-    LED_MODE_COIN_GLOW,        // Glowing / Breathing Brand Color of Active Cryptocurrency
+    LED_MODE_COIN_GLOW,        // Plain brand-colour breathing (no catalog entry)
+    LED_MODE_COIN,             // The coin's chain rhythm (catalog pattern + block time)
     LED_MODE_SOFTAP_PULSE,     // Neon Magenta / Violet SoftAP Captive Portal Broadcast
     LED_MODE_RAINBOW_CYCLE,    // Smooth Multi-Color Rainbow Wave
     LED_MODE_ENTROPY_CHURN,    // Dynamic Seed Entropy Jitter Sparkles
@@ -44,11 +46,16 @@ public:
     void flashTap(uint8_t r = 200, uint8_t g = 255, uint8_t b = 255, uint16_t durationMs = 60);
     void flashDoubleTap(uint8_t r = 255, uint8_t g = 140, uint8_t b = 0);
     void setCoinColor(uint8_t r, uint8_t g, uint8_t b);
+    // Chain rhythm of a catalog coin; calling it again for the same coin keeps the phase.
+    void setCoin(const char* symbol);
+    // Price moved by pctMove %: green flash up / red flash down, stronger for bigger moves.
+    void priceTick(float pctMove);
     void setEntropyJitter(uint32_t jitterHash);
     void setHoldProgress(float progress0to1);
     void setPixel(uint8_t r, uint8_t g, uint8_t b, uint8_t brightness = 4);
 
-    static RgbColor getCoinRgb(const char* symbol);
+    static RgbColor getCoinRgb(const char* symbol);   // catalog brand colour
+    static const CatalogCoin* findCoin(const char* symbol);
     // Last frame actually sent to the LED (diagnostics)
     uint8_t lastR = 0, lastG = 0, lastB = 0, lastBrightness = 0;
     LedMode currentMode() const { return _currentMode; }
@@ -57,6 +64,15 @@ private:
     void sendFrame(uint8_t r, uint8_t g, uint8_t b, uint8_t brightness);
     void writeByte(uint8_t byte);
     static RgbColor wheel(uint8_t wheelPos);
+    void renderHome(uint32_t now);
+    void renderCoin(uint32_t now);
+    void emit(uint8_t r, uint8_t g, uint8_t b, float level);   // level 0..1, perceptual
+
+    const CatalogCoin* _coin = nullptr;
+    uint32_t _coinStart = 0;
+    uint32_t _tickStart = 0, _tickDur = 0, _lastTick = 0;
+    uint8_t  _tickR = 0, _tickG = 0, _tickB = 0;
+    float    _tickLevel = 0;
 
     uint8_t _pinData = PIN_LED_DATA;
     uint8_t _pinClk = PIN_LED_CLK;

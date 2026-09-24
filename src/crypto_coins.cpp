@@ -6,6 +6,7 @@
 #include <Preferences.h>
 
 CoinAsset CryptoCoinRegistry::_coins[COIN_REGISTRY_COUNT];
+void (*CryptoCoinRegistry::onPriceTick)(const CoinAsset*, float) = nullptr;
 
 // Coins enabled on a fresh device
 static const char* DEFAULT_ENABLED[] = {"BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "PEPE"};
@@ -91,7 +92,9 @@ void CryptoCoinRegistry::updateBalance(SupportedCoinId id, float balance) {
 
 void CryptoCoinRegistry::updatePrice(SupportedCoinId id, float priceUsd, float change24h) {
     if (id < COIN_REGISTRY_COUNT && priceUsd > 0.0f) {
+        float prev = _coins[id].priceUsd;
         _coins[id].priceUsd = priceUsd;
+        if (onPriceTick && prev > 0.0f && prev != priceUsd) onPriceTick(&_coins[id], (priceUsd - prev) / prev * 100.0f);
         _coins[id].change24h = change24h;
         _coins[id].priceUpdatedMs = millis() | 1;   // never 0 once live
     }

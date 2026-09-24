@@ -153,7 +153,7 @@ void closeSetupPortal(bool saved) {
         delay(1500);
     }
     deviceState = STATE_IDLE_READY;
-    rgb.setMode(LED_MODE_BREATHE_CYAN);
+    rgb.setMode(LED_MODE_HOME);
     const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
     ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
 }
@@ -183,7 +183,7 @@ void setup() {
     // 2. Hardware Peripherals
     btn.begin(PIN_BTN);
     rgb.begin(PIN_LED_DATA, PIN_LED_CLK);
-    rgb.setMode(LED_MODE_BREATHE_CYAN);
+    rgb.setMode(LED_MODE_HOME);
     rgb.update();
 
     // 3. Security Config (load screen rotation and master PIN)
@@ -218,6 +218,18 @@ void setup() {
     // 7. Portfolio & Seed Engines
     PortfolioManager::init();
     homeTheme.load();
+    // Price ticks light the LED: the coin on screen flashes on its own moves; the home screen
+    // flashes when the whole portfolio's value moves. (A lambda: Arduino's generated
+    // prototypes would precede the CoinAsset type.)
+    CryptoCoinRegistry::onPriceTick = [](const CoinAsset* coin, float pctMove) {
+        if (!coin->enabled || PowerManager::isDisplaySleeping()) return;
+        if (deviceState == STATE_PORTFOLIO_TRACKER) {
+            if (coin == PortfolioManager::getCurrentCoin()) rgb.priceTick(pctMove);
+        } else if (deviceState == STATE_IDLE_READY && coin->balance > 0.0f) {
+            float total = PortfolioManager::getTotalValueUsd();
+            if (total > 0.0f) rgb.priceTick(pctMove * coin->balance * coin->priceUsd / total);   // weighted by holdings
+        }
+    };
     SeedGenerator::init();
     wifi = new WifiManager();
     wifi->begin();
@@ -233,7 +245,7 @@ void setup() {
         deviceState = STATE_IDLE_READY;
         const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
         ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        rgb.setMode(LED_MODE_HOME);
     }
 
     ctap2Engine.markReady();
@@ -383,14 +395,14 @@ void processPasskeyHubState(ButtonEvent ev) {
         if (coin) {
             RgbColor c = RgbStatus::getCoinRgb(coin->symbol);
             rgb.flashTap(c.r, c.g, c.b, 60);
-            rgb.setCoinColor(c.r, c.g, c.b);
+            rgb.setCoin(coin->symbol);
         }
         renderCurrentPortfolioCard();
         Serial.println("[NAV] Switched to Screen 3: Crypto & Asset Hub (Keep-Awake ON)");
     } else if (ev == BTN_DOUBLE_CLICK) {
         // Double tap returns to Screen 1: Base Home Screen
         deviceState = STATE_IDLE_READY;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        rgb.setMode(LED_MODE_HOME);
         const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
         ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
         Serial.println("[NAV] Returned to Screen 1: Base Home Screen");
@@ -410,8 +422,7 @@ void renderCurrentPortfolioCard() {
     CoinAsset* coin = PortfolioManager::getCurrentCoin();
     if (coin) {
         // ── Always sync LED to active coin brand color ─────────────────
-        RgbColor c = RgbStatus::getCoinRgb(coin->symbol);
-        rgb.setCoinColor(c.r, c.g, c.b);
+        rgb.setCoin(coin->symbol);
 
         ui.renderPortfolioCard(coin->symbol, coin->name, coin->balance, coin->priceUsd, coin->change24h,
                                PortfolioManager::getCurrentIndex(), PortfolioManager::getActiveCount(),
@@ -427,14 +438,14 @@ void processPortfolioTrackerState(ButtonEvent ev) {
         if (coin) {
             RgbColor c = RgbStatus::getCoinRgb(coin->symbol);
             rgb.flashTap(c.r, c.g, c.b, 60);
-            rgb.setCoinColor(c.r, c.g, c.b);
+            rgb.setCoin(coin->symbol);
         }
         renderCurrentPortfolioCard();
     } else if (ev == BTN_DOUBLE_CLICK) {
         // Double tap returns to Screen 1: Base Home Screen and releases keep-awake
         PowerManager::setKeepAwake(false);
         deviceState = STATE_IDLE_READY;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        rgb.setMode(LED_MODE_HOME);
         const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
         ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
         Serial.println("[NAV] Exited Crypto Hub -> Base Home Screen");
@@ -443,7 +454,7 @@ void processPortfolioTrackerState(ButtonEvent ev) {
         CoinAsset* coin = PortfolioManager::getCurrentCoin();
         if (coin) {
             deviceState = STATE_RECEIVE_QR;
-            showReceiveScreen(coin->symbol, "any: back");
+            showReceiveScreen(coin->symbol, "PRESS: BACK");
         }
     } else if (ev == BTN_LONG_PRESS) {
         // Long press opens Master PIN Gate to unlock Private Vault!
@@ -523,7 +534,7 @@ void processPinEntryState(ButtonEvent ev) {
                     rgb.setMode(LED_MODE_STROBE_RED);
                     delay(1500);
                     deviceState = STATE_IDLE_READY;
-                    rgb.setMode(LED_MODE_BREATHE_CYAN);
+                    rgb.setMode(LED_MODE_HOME);
                     ui.renderReadyDashboard(millis() / 1000, true, false);
                     return;
                 }
@@ -573,8 +584,7 @@ void showReceiveScreen(const char* symbol, const char* hint) {
         for (char* c = qrText; *c; c++) *c = toupper(*c);
     }
     if (coin && coin->enabled && !addr[0]) hint = wallet && wallet->hasSeed() ? "UNLOCK TO CREATE" : "NO WALLET YET";
-    RgbColor c = RgbStatus::getCoinRgb(symbol);
-    rgb.setCoinColor(c.r, c.g, c.b);
+    rgb.setCoin(symbol);
     ui.renderReceiveScreen(symbol, coin ? coin->meta->network : "Unsupported", addr, qrText, hint);
 }
 
@@ -619,8 +629,7 @@ void processVaultDashboardState(ButtonEvent ev) {
         PowerManager::setKeepAwake(true);
         CoinAsset* coin = PortfolioManager::getCurrentCoin();
         if (coin) {
-            RgbColor c = RgbStatus::getCoinRgb(coin->symbol);
-            rgb.setCoinColor(c.r, c.g, c.b);
+            rgb.setCoin(coin->symbol);
         }
         renderCurrentPortfolioCard();
         Serial.println("[VAULT] Vault Locked. Returned to Crypto Hub.");
@@ -717,7 +726,7 @@ void processSeedEntropyState(ButtonEvent ev) {
 
                 currentWordIdx = 0;
                 deviceState = STATE_SEED_WORD_DISPLAY;
-                rgb.setMode(LED_MODE_BREATHE_CYAN);
+                rgb.setMode(LED_MODE_HOME);
                 ui.renderSeedBackupScreen(1, totalMnemonicWords, mnemonicWords[0]);
                 Serial.printf("[SEED] Successfully generated %d-word BIP-39 mnemonic!\n", totalMnemonicWords);
             }
@@ -725,7 +734,7 @@ void processSeedEntropyState(ButtonEvent ev) {
     } else if (ev == BTN_DOUBLE_CLICK) {
         // Cancel back to idle
         deviceState = STATE_IDLE_READY;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        rgb.setMode(LED_MODE_HOME);
         ui.renderReadyDashboard(millis() / 1000, true, wallet->isUnlocked());
     }
 }
@@ -752,7 +761,7 @@ void processSeedWordDisplayState(ButtonEvent ev) {
         delay(1200);
 
         deviceState = STATE_IDLE_READY;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        rgb.setMode(LED_MODE_HOME);
         ui.renderReadyDashboard(millis() / 1000, true, true);
     }
 }
@@ -901,7 +910,7 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
 
     deviceState = prev;
     if (deviceState == STATE_IDLE_READY) {
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        rgb.setMode(LED_MODE_HOME);
         const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
         ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
     } else if (deviceState == STATE_PASSKEY_HUB) {
@@ -1138,7 +1147,7 @@ void handleSerialCommands() {
     } else if (cmd.equalsIgnoreCase("lock")) {
         wallet->lock();
         deviceState = STATE_IDLE_READY;
-        rgb.setMode(LED_MODE_BREATHE_CYAN);
+        rgb.setMode(LED_MODE_HOME);
         ui.renderReadyDashboard(millis() / 1000, true, false);
         Serial.println("[VAULT] 🔒 Vault locked and volatile key material zeroized.");
     } else if (cmd.startsWith("led ")) {
@@ -1148,16 +1157,16 @@ void handleSerialCommands() {
             rgb.flashRainbow(2000);
             Serial.println("[LED] 🌈 Rainbow shimmer activated");
         } else if (mode.equalsIgnoreCase("btc")) {
-            rgb.setCoinColor(255, 140, 0);
+            rgb.setCoin("BTC");
             Serial.println("[LED] 🟠 Bitcoin Gold/Orange activated");
         } else if (mode.equalsIgnoreCase("eth")) {
-            rgb.setCoinColor(138, 75, 255);
+            rgb.setCoin("ETH");
             Serial.println("[LED] 🟣 Ethereum Royal Violet activated");
         } else if (mode.equalsIgnoreCase("sol")) {
-            rgb.setCoinColor(20, 241, 149);
+            rgb.setCoin("SOL");
             Serial.println("[LED] 🟢 Solana Neon Turquoise activated");
         } else if (mode.equalsIgnoreCase("doge")) {
-            rgb.setCoinColor(255, 195, 15);
+            rgb.setCoin("DOGE");
             Serial.println("[LED] 🟡 Dogecoin Sunny Gold activated");
         } else if (mode.equalsIgnoreCase("softap")) {
             rgb.setMode(LED_MODE_SOFTAP_PULSE);

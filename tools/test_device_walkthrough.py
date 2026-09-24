@@ -114,6 +114,8 @@ def main():
     snap("home")
 
     print("\n[2] Screen walkthrough")
+    if d.diag().get("sleeping") == "1":
+        d.press("short")   # the first press only wakes the display (by design)
     d.press("short"); st = d.diag()
     check(st.get("state") == "3", "short press: home -> passkey hub", str(st.get("state")))
     snap("passkey-hub")
@@ -126,7 +128,12 @@ def main():
 
     print("\n[3] Receive QR (throwaway wallet)")
     d.cmd("newseed quick", until="mnemonic:", wait=25)
-    addrs = dict(re.findall(r"ADDR (\w+) (\S+)", d.cmd("addrs", until="ADDR END")))
+    addrs = {}
+    for _ in range(2):   # one retry: the first read can race the end of seed creation
+        addrs = dict(re.findall(r"ADDR (\w+) (\S+)", d.cmd("addrs", until="ADDR END", wait=5)))
+        if addrs:
+            break
+        time.sleep(1)
     check(len(addrs) >= 4, f"throwaway wallet addresses: {sorted(addrs)}")
     for _ in range(4):  # back to price screen
         if d.diag().get("state") == "4":
