@@ -8,6 +8,8 @@
 #pragma once
 
 #include <Arduino.h>
+#include "coin_catalog.h"
+#include "wallet_families.h"
 
 enum CryptoCoin {
     COIN_BTC,
@@ -59,6 +61,11 @@ public:
     const char* getAddress(CryptoCoin coin) const;
     const char* getCoinSymbol(CryptoCoin coin) const;
     const char* getCoinName(CryptoCoin coin) const;
+    // Receive address of a wallet family ("" until derived: needs one unlock after the
+    // family's first coin is enabled). Only families with an enabled coin are kept.
+    const char* getFamilyAddress(WalletFamily fam) const { return fam < FAM_COUNT ? _famAddr[fam] : ""; }
+    // Re-sync addresses after the coin selection changed (derives new families if unlocked)
+    void refreshFamilies();
 
     // Clear-Signing (WYSIWYS) Engine
     bool prepareSignRequest(CryptoCoin coin, const char* to, const char* amt, const char* fee = "Standard");
@@ -74,6 +81,8 @@ public:
 private:
     void deriveAllAccounts();
     void publishAddresses();
+    void deriveFamilies();
+    void saveFamilyCache();
     bool storeSeed();
     bool loadSeed();
     void deriveBtcAddress(WalletAccount& acc);
@@ -86,5 +95,6 @@ private:
     char          _mnemonic[160];
     uint8_t       _masterSeed[64];
     WalletAccount _accounts[COIN_COUNT];
+    char          _famAddr[FAM_COUNT][FAMILY_ADDR_LEN];
     ClearSignTx   _currentTx;
 };

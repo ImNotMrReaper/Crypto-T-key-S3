@@ -18,6 +18,8 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <Preferences.h>
+#include "USB.h"
+#include <WiFi.h>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include "esp_private/brownout.h"
@@ -45,6 +47,9 @@ __attribute__((constructor(101))) void pre_init_early() {
 #include "src/psbt_signer.h"
 #include "src/evm_decoder.h"
 #include "src/sd_vault.h"
+#include "src/wallet_families.h"
+#include "src/bip32_engine.h"
+#include <mbedtls/platform_util.h>
 
 // ─── Subsystem Allocations (Dynamic Initialization) ──────────────────────────
 TFT_eSPI*     tft    = nullptr;
@@ -68,6 +73,7 @@ uint32_t      lastStateUpdate = 0;
 uint32_t      lastTickerRefreshMs = 0;   // 1s live ticker auto-refresh
 CryptoCoin    currentViewCoin = COIN_BTC;
 bool          s_simulatedTouch = false;
+ButtonEvent   s_injectedEvent = BTN_NONE;   // test builds: remote button presses
 
 // Seed Generator State
 char          generatedMnemonic[240] = {0};
@@ -144,6 +150,8 @@ void setup() {
     delay(600);
 
     Serial.println("\n[BOOT] ===== CRYPTO TKEY S3 INITIALIZATION =====");
+    Serial.printf("[BOOT] Reset reason: %d (1=power-on 3=software 4=panic 5=int-wdt 6=task-wdt 7=wdt 9=brownout)\n",
+                  (int)esp_reset_reason());
     Serial.printf("[BOOT] CPU Clock: %d MHz | RF: Disabled (Thermal Throttled)\n", getCpuFrequencyMhz());
 
     // 2. Hardware Peripherals
@@ -209,6 +217,10 @@ void setup() {
 // ─── Main Loop ───────────────────────────────────────────────────────────────
 void loop() {
     ButtonEvent ev = btn.update();
+    if (ev == BTN_NONE && s_injectedEvent != BTN_NONE) {
+        ev = s_injectedEvent;
+        s_injectedEvent = BTN_NONE;
+    }
     rgb.update();
     ctapHid.process();
     if (wifi) wifi->update();
@@ -233,6 +245,7 @@ void loop() {
 
             portal->stop();
             if (wifi) wifi->setPortalActive(false);
+            if (wallet) wallet->refreshFamilies();   // addresses only for the newly selected coins
             rgb.flashRainbow(800);
             ui.renderSuccessBanner("VAULT PROVISIONED", "LAUNCHING KEY");
             delay(1500);
@@ -547,39 +560,23 @@ void processPinEntryState(ButtonEvent ev) {
 // Explicit list: a coin gets a receive QR only if this device derives an address that
 // is valid on its network. (The registry also tags TAO/INJ/BNB with EVM paths, but
 // their address formats differ, so they are deliberately absent.)
-struct ReceiveRoute { const char* symbol; CryptoCoin source; const char* network; };
-static const ReceiveRoute RECEIVE_ROUTES[] = {
-    {"BTC", COIN_BTC, "Bitcoin"},
-    {"ETH", COIN_ETH, "Ethereum"},
-    {"LINK", COIN_ETH, "ERC-20 (ETH)"}, {"UNI", COIN_ETH, "ERC-20 (ETH)"},
-    {"SHIB", COIN_ETH, "ERC-20 (ETH)"}, {"PEPE", COIN_ETH, "ERC-20 (ETH)"},
-    {"FLOKI", COIN_ETH, "ERC-20 (ETH)"}, {"MOG", COIN_ETH, "ERC-20 (ETH)"},
-    {"TURBO", COIN_ETH, "ERC-20 (ETH)"}, {"NEIRO", COIN_ETH, "ERC-20 (ETH)"},
-    {"POL", COIN_ETH, "Polygon"}, {"ARB", COIN_ETH, "Arbitrum"},
-    {"OP", COIN_ETH, "Optimism"}, {"BRETT", COIN_ETH, "Base"},
-    {"SOL", COIN_SOL, "Solana"},
-    {"BONK", COIN_SOL, "SPL (Solana)"}, {"WIF", COIN_SOL, "SPL (Solana)"},
-    {"POPCAT", COIN_SOL, "SPL (Solana)"}, {"GOAT", COIN_SOL, "SPL (Solana)"},
-    {"DOGE", COIN_DOGE, "Dogecoin"},
-};
-
+// Receive QR for any selected coin: the address of its wallet family (EVM tokens share the
+// ETH address, SPL tokens the SOL address, ...), labelled with the coin's network.
 void showReceiveScreen(const char* symbol, const char* hint) {
-    const ReceiveRoute* route = nullptr;
-    for (const ReceiveRoute& r : RECEIVE_ROUTES) {
-        if (strcmp(r.symbol, symbol) == 0) route = &r;
-    }
-    const char* addr = (route && wallet) ? wallet->getAddress(route->source) : "";
+    const CoinAsset* coin = CryptoCoinRegistry::findBySymbol(symbol);
+    const char* addr = (coin && coin->enabled) ? coin->address : "";
     // BIP-173: an all-uppercase bech32 address is valid and encodes in the compact
     // alphanumeric QR mode (bigger modules, easier scan). Other chains are case-sensitive.
-    char qrText[72];
+    char qrText[FAMILY_ADDR_LEN];
     strncpy(qrText, addr, sizeof(qrText) - 1);
     qrText[sizeof(qrText) - 1] = '\0';
-    if (route && route->source == COIN_BTC) {
+    if (coin && (coin->meta->family == FAM_BTC || coin->meta->family == FAM_LTC)) {
         for (char* c = qrText; *c; c++) *c = toupper(*c);
     }
+    if (coin && coin->enabled && !addr[0]) hint = wallet && wallet->hasSeed() ? "UNLOCK TO CREATE" : "NO WALLET YET";
     RgbColor c = RgbStatus::getCoinRgb(symbol);
     rgb.setCoinColor(c.r, c.g, c.b);
-    ui.renderReceiveScreen(symbol, route ? route->network : "Unsupported", addr, qrText, hint);
+    ui.renderReceiveScreen(symbol, coin ? coin->meta->network : "Unsupported", addr, qrText, hint);
 }
 
 // ─── Helper: Unified Vault Coin Display with Dynamic LED & UI Theme Sync ─────
@@ -953,6 +950,10 @@ void handleSerialCommands() {
     String res;
     if (PortfolioManager::processCommand(cmd, res)) {
         Serial.println(res);
+        if (cmd.startsWith("enable ") || cmd.startsWith("disable ")) {
+            CryptoCoinRegistry::savePreferences();
+            if (wallet) wallet->refreshFamilies();
+        }
         lastTickerRefreshMs = millis();
         renderCurrentPortfolioCard();
         return;
@@ -962,7 +963,7 @@ void handleSerialCommands() {
         Serial.println("\n--- Crypto TKey S3 CLI ---");
         Serial.println("  status                   - Print security key status & uptime");
         Serial.println("  flip                     - Flip display 180 degrees (landscape)");
-        Serial.println("  coins                    - List all 24 supported coins & holdings");
+        Serial.println("  coins                    - List the coin catalog & holdings");
         Serial.println("  enable <SYM>             - Enable coin in active portfolio tracker");
         Serial.println("  disable <SYM>            - Disable coin from portfolio tracker");
         Serial.println("  setbal <SYM> <AMT>       - Set user coin holding balance");
@@ -1019,12 +1020,71 @@ void handleSerialCommands() {
         // Any local process can open the CDC port: the PIN is only entered on the device.
         Serial.println("[VAULT] Serial unlock is disabled; enter the PIN on the device.");
 #endif
+    } else if (cmd.equalsIgnoreCase("diag")) {
+        Serial.printf("DIAG state=%d uptime=%lus heap=%u minheap=%u reset=%d wifimode=%d usbhost=%d "
+                      "loopstack=%u led=%u,%u,%u@%u mode=%d sleeping=%d\n",
+                      (int)deviceState, millis() / 1000, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
+                      (int)esp_reset_reason(), (int)WiFi.getMode(), (int)(bool)USB,
+                      (unsigned)uxTaskGetStackHighWaterMark(nullptr), rgb.lastR, rgb.lastG, rgb.lastB,
+                      rgb.lastBrightness, (int)rgb.currentMode(), (int)PowerManager::isDisplaySleeping());
+#ifdef TKEY_TEST_SERIAL_TOUCH
+    } else if (cmd.startsWith("btn ")) {
+        String b = cmd.substring(4);
+        b.trim();
+        s_injectedEvent = b == "short" ? BTN_SHORT_PRESS : b == "double" ? BTN_DOUBLE_CLICK :
+                          b == "long" ? BTN_LONG_PRESS : b == "vlong" ? BTN_VERY_LONG_PRESS : BTN_NONE;
+        Serial.printf("[TEST] injected button: %s\n", b.c_str());
+    } else if (cmd.equalsIgnoreCase("shot")) {
+        // Raw RGB565 framebuffer of the UI sprite, base64, for a laptop-side screenshot
+        TFT_eSprite* sp = ui.sprite();
+        if (!sp) {
+            Serial.println("SHOT NONE");
+        } else {
+            const uint8_t* px = (const uint8_t*)sp->getPointer();
+            const size_t n = DISP_W * DISP_H * 2;
+            static const char* B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            Serial.printf("SHOT %d %d\n", DISP_W, DISP_H);
+            char out[81];
+            size_t o = 0;
+            for (size_t i = 0; i < n; i += 3) {
+                uint32_t v = (uint32_t)px[i] << 16 | (i + 1 < n ? (uint32_t)px[i + 1] << 8 : 0) | (i + 2 < n ? px[i + 2] : 0);
+                out[o++] = B64[(v >> 18) & 63];
+                out[o++] = B64[(v >> 12) & 63];
+                out[o++] = i + 1 < n ? B64[(v >> 6) & 63] : '=';
+                out[o++] = i + 2 < n ? B64[v & 63] : '=';
+                if (o >= 76) { out[o] = '\0'; Serial.println(out); o = 0; }
+            }
+            if (o) { out[o] = '\0'; Serial.println(out); }
+            Serial.println("SHOT END");
+        }
+    } else if (cmd.startsWith("famtest ")) {
+        // Derive every wallet family for a given (test) mnemonic; compared with bip_utils vectors
+        String m = cmd.substring(8);
+        m.trim();
+        uint8_t seed[64];
+        if (!Bip32Engine::mnemonicToSeed(m.c_str(), "", seed)) {
+            Serial.println("FAM ERROR seed");
+        } else {
+            char addr[FAMILY_ADDR_LEN];
+            for (int f = 0; f < FAM_COUNT; f++) {
+                uint32_t t0 = millis();
+                bool ok = WalletFamilies::deriveAddress((WalletFamily)f, seed, addr);
+                Serial.printf("FAM %d %s %lums\n", f, ok ? addr : "FAIL", millis() - t0);
+            }
+            mbedtls_platform_zeroize(seed, sizeof(seed));
+        }
+        Serial.println("FAM END");
+#endif
     } else if (cmd.equalsIgnoreCase("addrs")) {
         // Machine-readable public receive addresses for the host companion (balances).
         // Public data only, cached at seed creation, so this works while locked.
-        for (int i = 0; i < COIN_COUNT; i++) {
-            const WalletAccount* acc = wallet->getAccount((CryptoCoin)i);
-            if (acc && acc->address[0]) Serial.printf("ADDR %s %s\n", acc->symbol, acc->address);
+        // One line per selected coin: ADDR <SYM> <address> <family> <network>|<contract>
+        for (int i = 0; i < CryptoCoinRegistry::getCoinCount(); i++) {
+            const CoinAsset* c = CryptoCoinRegistry::getCoinByIndex(i);
+            if (c->enabled && c->address[0]) {
+                Serial.printf("ADDR %s %s %s %s|%s\n", c->symbol, c->address, WalletFamilies::name(c->meta->family),
+                              c->meta->network, c->meta->contract ? c->meta->contract : "");
+            }
         }
         Serial.println("ADDR END");
     } else if (cmd.equalsIgnoreCase("addresses")) {

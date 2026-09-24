@@ -86,7 +86,21 @@ void CryptoWallet::begin() {
         _accounts[i].address[0] = '\0';
         if (_hasSeed) prefs.getString(ADDR_KEYS[i], _accounts[i].address, sizeof(_accounts[i].address));
     }
+    for (int f = 0; f < FAM_COUNT; f++) {
+        char key[8];
+        snprintf(key, sizeof(key), "fa_%d", f);
+        _famAddr[f][0] = '\0';
+        if (_hasSeed) prefs.getString(key, _famAddr[f], FAMILY_ADDR_LEN);
+    }
     prefs.end();
+    // Pre-family firmware cached only the four signing accounts
+    const WalletFamily LEGACY_FAM[COIN_COUNT] = {FAM_BTC, FAM_EVM, FAM_SOL, FAM_DOGE};
+    for (int i = 0; i < COIN_COUNT; i++) {
+        if (_hasSeed && !_famAddr[LEGACY_FAM[i]][0] && _accounts[i].address[0]) {
+            strncpy(_famAddr[LEGACY_FAM[i]], _accounts[i].address, FAMILY_ADDR_LEN - 1);
+            _famAddr[LEGACY_FAM[i]][FAMILY_ADDR_LEN - 1] = '\0';
+        }
+    }
     if (_hasSeed) publishAddresses();
     Serial.printf("[WALLET] %s\n", _hasSeed ? "Seed present (encrypted). Locked." : "No wallet seed yet: create one from the vault menu.");
 }
@@ -224,6 +238,7 @@ bool CryptoWallet::setMnemonic(const char* phrase) {
     bool wasUnlocked = _isUnlocked;
     strncpy(_mnemonic, phrase, sizeof(_mnemonic) - 1);
     _mnemonic[sizeof(_mnemonic) - 1] = '\0';
+    memset(_famAddr, 0, sizeof(_famAddr));   // a new seed never inherits old addresses
     {
         CpuBoost boost;
         deriveAllAccounts();
@@ -284,25 +299,63 @@ void CryptoWallet::deriveAllAccounts() {
     // 5. Real Dogecoin Address (P2PKH Legacy Base58)
     deriveDogeAddress(_accounts[COIN_DOGE]);
 
-    // Update global coin registry with real deposit addresses
+    // Receive addresses for every wallet family the selected coins use
+    deriveFamilies();
     publishAddresses();
     Serial.println("[WALLET] Addresses derived from the stored seed.");
 }
 
-// Pushes the (public) receive addresses into the coin registry for the portfolio tracker.
+// Derives the receive address of every wallet family that has an enabled coin and is not
+// cached yet; drops cached addresses of families no selected coin uses any more.
+void CryptoWallet::deriveFamilies() {
+    for (int f = 0; f < FAM_COUNT; f++) {
+        WalletFamily fam = (WalletFamily)f;
+        if (!CryptoCoinRegistry::isFamilyInUse(fam)) {
+            _famAddr[f][0] = '\0';
+        } else if (!_famAddr[f][0]) {
+            if (!WalletFamilies::deriveAddress(fam, _masterSeed, _famAddr[f])) _famAddr[f][0] = '\0';
+        }
+    }
+    saveFamilyCache();
+}
+
+void CryptoWallet::saveFamilyCache() {
+    Preferences prefs;
+    if (!prefs.begin("wallet_seed", false)) return;
+    for (int f = 0; f < FAM_COUNT; f++) {
+        char key[8];
+        snprintf(key, sizeof(key), "fa_%d", f);
+        if (_famAddr[f][0]) {
+            if (prefs.getString(key, "") != _famAddr[f]) prefs.putString(key, _famAddr[f]);
+        } else if (prefs.isKey(key)) {
+            prefs.remove(key);
+        }
+    }
+    prefs.end();
+}
+
+void CryptoWallet::refreshFamilies() {
+    if (!_hasSeed) return;
+    if (_isUnlocked) {
+        CpuBoost boost;
+        deriveFamilies();
+    } else {
+        for (int f = 0; f < FAM_COUNT; f++) {
+            if (!CryptoCoinRegistry::isFamilyInUse((WalletFamily)f)) _famAddr[f][0] = '\0';
+        }
+        saveFamilyCache();
+    }
+    publishAddresses();
+}
+
+// Pushes the (public) receive addresses into the coin registry: only selected coins get one.
 void CryptoWallet::publishAddresses() {
-    CoinAsset* btcCoin = CryptoCoinRegistry::getCoin(COIN_ID_BTC);
-    if (btcCoin) strncpy(btcCoin->address, _accounts[COIN_BTC].address, sizeof(btcCoin->address) - 1);
-
-    CoinAsset* ethCoin = CryptoCoinRegistry::getCoin(COIN_ID_ETH);
-    if (ethCoin) strncpy(ethCoin->address, _accounts[COIN_ETH].address, sizeof(ethCoin->address) - 1);
-
-    CoinAsset* solCoin = CryptoCoinRegistry::getCoin(COIN_ID_SOL);
-    if (solCoin) strncpy(solCoin->address, _accounts[COIN_SOL].address, sizeof(solCoin->address) - 1);
-
-    CoinAsset* dogeCoin = CryptoCoinRegistry::getCoin(COIN_ID_DOGE);
-    if (dogeCoin) strncpy(dogeCoin->address, _accounts[COIN_DOGE].address, sizeof(dogeCoin->address) - 1);
-
+    for (int i = 0; i < CryptoCoinRegistry::getCoinCount(); i++) {
+        CoinAsset* c = CryptoCoinRegistry::getCoinByIndex(i);
+        const char* a = (c->enabled && _hasSeed) ? _famAddr[c->meta->family] : "";
+        strncpy(c->address, a, sizeof(c->address) - 1);
+        c->address[sizeof(c->address) - 1] = '\0';
+    }
 }
 
 void CryptoWallet::deriveBtcAddress(WalletAccount& acc) {

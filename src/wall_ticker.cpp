@@ -12,23 +12,9 @@
 extern const uint8_t x509_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
 extern const uint8_t x509_crt_bundle_end[] asm("_binary_x509_crt_bundle_end");
 
-// CoinGecko ids (kept in sync with tools/crypto_tracker_daemon.py COINGECKO_MAP)
-static const struct { const char* sym; const char* id; } CG_IDS[] = {
-    {"BTC", "bitcoin"}, {"ETH", "ethereum"}, {"SOL", "solana"}, {"BNB", "binancecoin"},
-    {"XRP", "ripple"}, {"ADA", "cardano"}, {"AVAX", "avalanche-2"}, {"DOT", "polkadot"},
-    {"LINK", "chainlink"}, {"LTC", "litecoin"}, {"BCH", "bitcoin-cash"}, {"ATOM", "cosmos"},
-    {"POL", "matic-network"}, {"TRX", "tron"}, {"NEAR", "near"}, {"SUI", "sui"},
-    {"APT", "aptos"}, {"TON", "the-open-network"}, {"XLM", "stellar"}, {"ALGO", "algorand"},
-    {"HBAR", "hedera-hashgraph"}, {"VET", "vechain"}, {"FIL", "filecoin"},
-    {"ICP", "internet-computer"}, {"TAO", "bittensor"}, {"INJ", "injective-protocol"},
-    {"ARB", "arbitrum"}, {"OP", "optimism"}, {"KAS", "kaspa"}, {"XMR", "monero"},
-    {"EGLD", "elrond-erd-2"}, {"UNI", "uniswap"}, {"DOGE", "dogecoin"}, {"SHIB", "shiba-inu"},
-    {"PEPE", "pepe"}, {"BONK", "bonk"}, {"FLOKI", "floki"}, {"WIF", "dogwifcoin"},
-    {"BRETT", "based-brett"}, {"MOG", "mog-coin"}, {"TURBO", "turbo"}, {"POPCAT", "popcat"},
-    {"NEIRO", "neiro-ethereum"}, {"GOAT", "goatseus-maximus"},
-};
+// CoinGecko ids come from the coin catalog (CatalogCoin::cgId)
 
-#define MAX_RESULTS 64
+#define MAX_RESULTS (CATALOG_COUNT * 2)
 static char s_results[MAX_RESULTS][72];
 static int s_resultCount = 0;
 static SemaphoreHandle_t s_lock = nullptr;
@@ -91,13 +77,9 @@ static void fetchPrices() {
     String ids;
     for (int i = 0; i < CryptoCoinRegistry::getCoinCount(); i++) {
         CoinAsset* c = CryptoCoinRegistry::getCoinByIndex(i);
-        if (!c || !c->enabled) continue;
-        for (auto& m : CG_IDS) {
-            if (strcmp(m.sym, c->symbol) == 0) {
-                if (ids.length()) ids += ",";
-                ids += m.id;
-            }
-        }
+        if (!c->enabled) continue;
+        if (ids.length()) ids += ",";
+        ids += c->meta->cgId;
     }
     if (!ids.length()) return;
     String body;
@@ -105,11 +87,13 @@ static void fetchPrices() {
                       nullptr, body)) return;
     JsonDocument doc;
     if (deserializeJson(doc, body)) return;
-    for (auto& m : CG_IDS) {
-        JsonVariant v = doc[m.id];
+    for (int i = 0; i < CryptoCoinRegistry::getCoinCount(); i++) {
+        CoinAsset* c = CryptoCoinRegistry::getCoinByIndex(i);
+        if (!c->enabled) continue;
+        JsonVariant v = doc[c->meta->cgId];
         if (v.isNull()) continue;
         char cmd[72];
-        snprintf(cmd, sizeof(cmd), "setprice %s %.10g %.2f", m.sym, v["usd"].as<double>(),
+        snprintf(cmd, sizeof(cmd), "setprice %s %.10g %.2f", c->symbol, v["usd"].as<double>(),
                  v["usd_24h_change"].as<double>());
         queueCmd(cmd);
     }
@@ -122,10 +106,10 @@ static void queueBalance(const char* sym, double bal) {
 }
 
 static void fetchBalances() {
-    CoinAsset* btc = CryptoCoinRegistry::getCoin(COIN_ID_BTC);
-    CoinAsset* eth = CryptoCoinRegistry::getCoin(COIN_ID_ETH);
-    CoinAsset* sol = CryptoCoinRegistry::getCoin(COIN_ID_SOL);
-    CoinAsset* doge = CryptoCoinRegistry::getCoin(COIN_ID_DOGE);
+    CoinAsset* btc = CryptoCoinRegistry::findBySymbol("BTC");
+    CoinAsset* eth = CryptoCoinRegistry::findBySymbol("ETH");
+    CoinAsset* sol = CryptoCoinRegistry::findBySymbol("SOL");
+    CoinAsset* doge = CryptoCoinRegistry::findBySymbol("DOGE");
     String body;
 
     if (btc && btc->address[0] &&
@@ -208,7 +192,7 @@ bool WallTicker::running() {
 
 void WallTicker::applyResults() {
     if (!s_lock) return;
-    char local[MAX_RESULTS][72];
+    static char local[MAX_RESULTS][72];   // too big for the loop task stack
     int n;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     n = s_resultCount;

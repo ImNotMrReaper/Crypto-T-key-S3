@@ -1,0 +1,1298 @@
+[
+ {
+  "symbol": "BTC",
+  "name": "Bitcoin",
+  "cg": "bitcoin",
+  "family": "BTC",
+  "network": "Bitcoin",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 1,
+  "rgb": [
+   247,
+   150,
+   31
+  ]
+ },
+ {
+  "symbol": "ETH",
+  "name": "Ethereum",
+  "cg": "ethereum",
+  "family": "EVM",
+  "network": "Ethereum",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 2,
+  "rgb": [
+   69,
+   74,
+   117
+  ]
+ },
+ {
+  "symbol": "BNB",
+  "name": "BNB",
+  "cg": "binancecoin",
+  "family": "EVM",
+  "network": "BNB Chain",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 4,
+  "rgb": [
+   241,
+   188,
+   21
+  ]
+ },
+ {
+  "symbol": "XRP",
+  "name": "XRP",
+  "cg": "ripple",
+  "family": "XRP",
+  "network": "XRP Ledger",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 5,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "SOL",
+  "name": "Solana",
+  "cg": "solana",
+  "family": "SOL",
+  "network": "Solana",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 7,
+  "rgb": [
+   36,
+   229,
+   179
+  ]
+ },
+ {
+  "symbol": "TRX",
+  "name": "TRON",
+  "cg": "tron",
+  "family": "TRX",
+  "network": "TRON",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 8,
+  "rgb": [
+   234,
+   18,
+   48
+  ]
+ },
+ {
+  "symbol": "ZEC",
+  "name": "Zcash",
+  "cg": "zcash",
+  "family": "ZEC",
+  "network": "Zcash t-addr",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 9,
+  "rgb": [
+   245,
+   183,
+   40
+  ]
+ },
+ {
+  "symbol": "LINK",
+  "name": "Chainlink",
+  "cg": "chainlink",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x514910771af9ca656af840dff83e8264ecf986ca",
+  "category": "CRYPTO",
+  "rank": 16,
+  "rgb": [
+   13,
+   75,
+   247
+  ]
+ },
+ {
+  "symbol": "LEO",
+  "name": "LEO Token",
+  "cg": "leo-token",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x2af5d2ad76741191d15dfe7bf6ac92d4bd912ca3",
+  "category": "CRYPTO",
+  "rank": 19,
+  "rgb": [
+   193,
+   166,
+   72
+  ]
+ },
+ {
+  "symbol": "XLM",
+  "name": "Stellar",
+  "cg": "stellar",
+  "family": "XLM",
+  "network": "Stellar",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 20,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "BCH",
+  "name": "Bitcoin Cash",
+  "cg": "bitcoin-cash",
+  "family": "BCH",
+  "network": "Bitcoin Cash",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 21,
+  "rgb": [
+   15,
+   194,
+   144
+  ]
+ },
+ {
+  "symbol": "UNI",
+  "name": "Uniswap",
+  "cg": "uniswap",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
+  "category": "CRYPTO",
+  "rank": 22,
+  "rgb": [
+   249,
+   12,
+   183
+  ]
+ },
+ {
+  "symbol": "NEAR",
+  "name": "NEAR Protocol",
+  "cg": "near",
+  "family": "NEAR",
+  "network": "NEAR",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 23,
+  "rgb": [
+   0,
+   235,
+   150
+  ]
+ },
+ {
+  "symbol": "LTC",
+  "name": "Litecoin",
+  "cg": "litecoin",
+  "family": "LTC",
+  "network": "Litecoin",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 24,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "AVAX",
+  "name": "Avalanche",
+  "cg": "avalanche-2",
+  "family": "EVM",
+  "network": "Avalanche C",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 27,
+  "rgb": [
+   232,
+   68,
+   69
+  ]
+ },
+ {
+  "symbol": "SUI",
+  "name": "Sui",
+  "cg": "sui",
+  "family": "SUI",
+  "network": "Sui",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 32,
+  "rgb": [
+   78,
+   164,
+   255
+  ]
+ },
+ {
+  "symbol": "CRO",
+  "name": "Cronos",
+  "cg": "crypto-com-chain",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xa0b73e1ff0b80914ab6fe0444e65848c4c34450b",
+  "category": "CRYPTO",
+  "rank": 36,
+  "rgb": [
+   6,
+   37,
+   100
+  ]
+ },
+ {
+  "symbol": "XAUT",
+  "name": "Tether Gold",
+  "cg": "tether-gold",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x68749665ff8d2d112fa859aa293f07a622782f38",
+  "category": "CRYPTO",
+  "rank": 40,
+  "rgb": [
+   212,
+   178,
+   91
+  ]
+ },
+ {
+  "symbol": "OKB",
+  "name": "OKB",
+  "cg": "okb",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x75231f58b43240c9718dd58b4967c5114342a86c",
+  "category": "CRYPTO",
+  "rank": 41,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "MNT",
+  "name": "Mantle",
+  "cg": "mantle",
+  "family": "EVM",
+  "network": "Mantle",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 46,
+  "rgb": [
+   88,
+   145,
+   126
+  ]
+ },
+ {
+  "symbol": "AAVE",
+  "name": "Aave",
+  "cg": "aave",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9",
+  "category": "CRYPTO",
+  "rank": 47,
+  "rgb": [
+   148,
+   146,
+   247
+  ]
+ },
+ {
+  "symbol": "ENA",
+  "name": "Ethena",
+  "cg": "ethena",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x57e114b691db790c35207b2e685d4a43181e6061",
+  "category": "CRYPTO",
+  "rank": 48,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "ONDO",
+  "name": "Ondo",
+  "cg": "ondo-finance",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xfaba6f8e4a5e8ab82f62fe7c39859fa577269be3",
+  "category": "CRYPTO",
+  "rank": 49,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "MORPHO",
+  "name": "Morpho",
+  "cg": "morpho",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x58d97b57bb95320f9a05dc918aef65434969c2b2",
+  "category": "CRYPTO",
+  "rank": 52,
+  "rgb": [
+   40,
+   115,
+   254
+  ]
+ },
+ {
+  "symbol": "PAXG",
+  "name": "PAX Gold",
+  "cg": "pax-gold",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x45804880de22913dafe09f4980848ece6ecbaf78",
+  "category": "CRYPTO",
+  "rank": 54,
+  "rgb": [
+   221,
+   190,
+   21
+  ]
+ },
+ {
+  "symbol": "SKY",
+  "name": "Sky",
+  "cg": "sky",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x56072c95faa701256059aa122697b133aded9279",
+  "category": "CRYPTO",
+  "rank": 57,
+  "rgb": [
+   54,
+   205,
+   248
+  ]
+ },
+ {
+  "symbol": "WLD",
+  "name": "Worldcoin",
+  "cg": "worldcoin-wld",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x163f8c2467924be0ae7b5347228cabf260318753",
+  "category": "CRYPTO",
+  "rank": 60,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "ARB",
+  "name": "Arbitrum",
+  "cg": "arbitrum",
+  "family": "EVM",
+  "network": "Arbitrum",
+  "contract": "0x912ce59144191c1204e64559fe8253a0e49e6548",
+  "category": "CRYPTO",
+  "rank": 62,
+  "rgb": [
+   91,
+   124,
+   153
+  ]
+ },
+ {
+  "symbol": "BGB",
+  "name": "Bitget Token",
+  "cg": "bitget-token",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x54d2252757e1672eead234d27b1270728ff90581",
+  "category": "CRYPTO",
+  "rank": 67,
+  "rgb": [
+   0,
+   235,
+   248
+  ]
+ },
+ {
+  "symbol": "GT",
+  "name": "Gate",
+  "cg": "gatechain-token",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xe66747a101bff2dba3697199dcce5b743b454759",
+  "category": "CRYPTO",
+  "rank": 72,
+  "rgb": [
+   11,
+   99,
+   254
+  ]
+ },
+ {
+  "symbol": "POL",
+  "name": "POL (ex-MATIC)",
+  "cg": "polygon-ecosystem-token",
+  "family": "EVM",
+  "network": "Polygon",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 74,
+  "rgb": [
+   109,
+   5,
+   245
+  ]
+ },
+ {
+  "symbol": "QNT",
+  "name": "Quant",
+  "cg": "quant-network",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x4a220e6096b25eadb88358cb44068a3248254675",
+  "category": "CRYPTO",
+  "rank": 75,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "JUP",
+  "name": "Jupiter",
+  "cg": "jupiter-exchange-solana",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+  "category": "CRYPTO",
+  "rank": 80,
+  "rgb": [
+   57,
+   184,
+   186
+  ]
+ },
+ {
+  "symbol": "RENDER",
+  "name": "Render",
+  "cg": "render-token",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x6de037ef9ad2725eb40118bb1702ebb27e4aeb24",
+  "category": "CRYPTO",
+  "rank": 82,
+  "rgb": [
+   208,
+   23,
+   24
+  ]
+ },
+ {
+  "symbol": "ATOM",
+  "name": "Cosmos Hub",
+  "cg": "cosmos",
+  "family": "ATOM",
+  "network": "Cosmos Hub",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 83,
+  "rgb": [
+   26,
+   29,
+   53
+  ]
+ },
+ {
+  "symbol": "JST",
+  "name": "JUST",
+  "cg": "just",
+  "family": "TRX",
+  "network": "TRC-20 (TRON)",
+  "contract": "TCFLL5dx5ZJdKnWuesXxi1VPwjLVmWZZy9",
+  "category": "CRYPTO",
+  "rank": 84,
+  "rgb": [
+   179,
+   29,
+   28
+  ]
+ },
+ {
+  "symbol": "NEXO",
+  "name": "NEXO",
+  "cg": "nexo",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xb62132e35a6c13ee1ee0f84dc5d40bad8d815206",
+  "category": "CRYPTO",
+  "rank": 85,
+  "rgb": [
+   228,
+   219,
+   202
+  ]
+ },
+ {
+  "symbol": "CAKE",
+  "name": "PancakeSwap",
+  "cg": "pancakeswap-token",
+  "family": "EVM",
+  "network": "BEP-20 (BSC)",
+  "contract": "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82",
+  "category": "CRYPTO",
+  "rank": 86,
+  "rgb": [
+   180,
+   113,
+   59
+  ]
+ },
+ {
+  "symbol": "VET",
+  "name": "VeChain",
+  "cg": "vechain",
+  "family": "VET",
+  "network": "VeChain",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 88,
+  "rgb": [
+   97,
+   68,
+   221
+  ]
+ },
+ {
+  "symbol": "INJ",
+  "name": "Injective",
+  "cg": "injective-protocol",
+  "family": "INJ",
+  "network": "Injective",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 89,
+  "rgb": [
+   81,
+   65,
+   254
+  ]
+ },
+ {
+  "symbol": "AERO",
+  "name": "Aerodrome Finance",
+  "cg": "aerodrome-finance",
+  "family": "EVM",
+  "network": "Base",
+  "contract": "0x940181a94a35a4569e4529a3cdfb74e38fd98631",
+  "category": "CRYPTO",
+  "rank": 95,
+  "rgb": [
+   88,
+   115,
+   234
+  ]
+ },
+ {
+  "symbol": "APT",
+  "name": "Aptos",
+  "cg": "aptos",
+  "family": "APT",
+  "network": "Aptos",
+  "contract": "",
+  "category": "CRYPTO",
+  "rank": 96,
+  "rgb": [
+   200,
+   234,
+   198
+  ]
+ },
+ {
+  "symbol": "ETHFI",
+  "name": "Ether.fi",
+  "cg": "ether-fi",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xfe0c30065b384f05761f15d0cc899d4f9f9cc0eb",
+  "category": "CRYPTO",
+  "rank": 97,
+  "rgb": [
+   24,
+   28,
+   110
+  ]
+ },
+ {
+  "symbol": "RAY",
+  "name": "Raydium",
+  "cg": "raydium",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
+  "category": "CRYPTO",
+  "rank": 105,
+  "rgb": [
+   22,
+   33,
+   67
+  ]
+ },
+ {
+  "symbol": "ZRO",
+  "name": "LayerZero",
+  "cg": "layerzero",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x6985884c4392d348587b19cb9eaaf157f13271cd",
+  "category": "CRYPTO",
+  "rank": 107,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "CRV",
+  "name": "Curve DAO",
+  "cg": "curve-dao-token",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xd533a949740bb3306d119cc777fa900ba034cd52",
+  "category": "CRYPTO",
+  "rank": 108,
+  "rgb": [
+   197,
+   7,
+   1
+  ]
+ },
+ {
+  "symbol": "PYTH",
+  "name": "Pyth Network",
+  "cg": "pyth-network",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",
+  "category": "CRYPTO",
+  "rank": 109,
+  "rgb": [
+   210,
+   199,
+   231
+  ]
+ },
+ {
+  "symbol": "FET",
+  "name": "Artificial Superintell",
+  "cg": "fetch-ai",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xaea46a60368a7bd060eec7df8cba43b7ef41ad85",
+  "category": "CRYPTO",
+  "rank": 117,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "PENDLE",
+  "name": "Pendle",
+  "cg": "pendle",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x808507121b80c02388fad14726482e061b8da827",
+  "category": "CRYPTO",
+  "rank": 125,
+  "rgb": [
+   29,
+   62,
+   111
+  ]
+ },
+ {
+  "symbol": "BTT",
+  "name": "BitTorrent",
+  "cg": "bittorrent",
+  "family": "TRX",
+  "network": "TRC-20 (TRON)",
+  "contract": "TAFjULxiVgT4qWk6UZwjqwZXTSaGaqnVp4",
+  "category": "CRYPTO",
+  "rank": 129,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "SUN",
+  "name": "Sun Token",
+  "cg": "sun-token",
+  "family": "TRX",
+  "network": "TRC-20 (TRON)",
+  "contract": "TSSMHYeV2uE9qYH95DqyoCuNCzEL1NvU3S",
+  "category": "CRYPTO",
+  "rank": 133,
+  "rgb": [
+   251,
+   181,
+   112
+  ]
+ },
+ {
+  "symbol": "LDO",
+  "name": "Lido DAO",
+  "cg": "lido-dao",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x5a98fcbea516cf06857215779fd812ca3bef1b32",
+  "category": "CRYPTO",
+  "rank": 134,
+  "rgb": [
+   234,
+   138,
+   134
+  ]
+ },
+ {
+  "symbol": "OHM",
+  "name": "Olympus",
+  "cg": "olympus",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x64aa3364f17a4d01c6f1751fd97c2bd3d7e7f1d5",
+  "category": "CRYPTO",
+  "rank": 144,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "GNO",
+  "name": "Gnosis",
+  "cg": "gnosis",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x6810e776880c02933d47db1b9fc05908e5386b96",
+  "category": "CRYPTO",
+  "rank": 146,
+  "rgb": [
+   20,
+   35,
+   53
+  ]
+ },
+ {
+  "symbol": "STRK",
+  "name": "Starknet",
+  "cg": "starknet",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xca14007eff0db1f8135f4c25b34de49ab0d42766",
+  "category": "CRYPTO",
+  "rank": 150,
+  "rgb": [
+   10,
+   11,
+   78
+  ]
+ },
+ {
+  "symbol": "USDT",
+  "name": "Tether",
+  "cg": "tether",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+  "category": "STABLE",
+  "rank": 3,
+  "rgb": [
+   9,
+   151,
+   151
+  ]
+ },
+ {
+  "symbol": "USDC",
+  "name": "USDC",
+  "cg": "usd-coin",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+  "category": "STABLE",
+  "rank": 6,
+  "rgb": [
+   20,
+   89,
+   193
+  ]
+ },
+ {
+  "symbol": "USDS",
+  "name": "USDS",
+  "cg": "usds",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xdc035d45d973e3ec169d2276ddab16f1e407384f",
+  "category": "STABLE",
+  "rank": 15,
+  "rgb": null
+ },
+ {
+  "symbol": "USDE",
+  "name": "Ethena USDe",
+  "cg": "ethena-usde",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",
+  "category": "STABLE",
+  "rank": 25,
+  "rgb": null
+ },
+ {
+  "symbol": "DAI",
+  "name": "Dai",
+  "cg": "dai",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x6b175474e89094c44da98b954eedeac495271d0f",
+  "category": "STABLE",
+  "rank": 26,
+  "rgb": [
+   250,
+   187,
+   56
+  ]
+ },
+ {
+  "symbol": "PYUSD",
+  "name": "PayPal USD",
+  "cg": "paypal-usd",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x6c3ea9036406852006290770bedfcaba0e23a0e8",
+  "category": "STABLE",
+  "rank": 39,
+  "rgb": null
+ },
+ {
+  "symbol": "TUSD",
+  "name": "TrueUSD",
+  "cg": "true-usd",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x0000000000085d4780b73119b644ae5ecd22b376",
+  "category": "STABLE",
+  "rank": 112,
+  "rgb": null
+ },
+ {
+  "symbol": "EURC",
+  "name": "EURC",
+  "cg": "euro-coin",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x1abaea1f7c830bd89acc67ec4af516284b1bc33c",
+  "category": "STABLE",
+  "rank": 118,
+  "rgb": null
+ },
+ {
+  "symbol": "FDUSD",
+  "name": "First Digital USD",
+  "cg": "first-digital-usd",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xc5f0f7b66764f6ec8c8dff7ba683102295e16409",
+  "category": "STABLE",
+  "rank": 137,
+  "rgb": null
+ },
+ {
+  "symbol": "DOGE",
+  "name": "Dogecoin",
+  "cg": "dogecoin",
+  "family": "DOGE",
+  "network": "Dogecoin",
+  "contract": "",
+  "category": "MEME",
+  "rank": 12,
+  "rgb": [
+   195,
+   170,
+   84
+  ]
+ },
+ {
+  "symbol": "SHIB",
+  "name": "Shiba Inu",
+  "cg": "shiba-inu",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce",
+  "category": "MEME",
+  "rank": 33,
+  "rgb": [
+   251,
+   164,
+   14
+  ]
+ },
+ {
+  "symbol": "PUMP",
+  "name": "Pump.fun",
+  "cg": "pump-fun",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn",
+  "category": "MEME",
+  "rank": 53,
+  "rgb": [
+   79,
+   199,
+   139
+  ]
+ },
+ {
+  "symbol": "PEPE",
+  "name": "Pepe",
+  "cg": "pepe",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x6982508145454ce325ddbe47a25d4ec3d2311933",
+  "category": "MEME",
+  "rank": 55,
+  "rgb": [
+   75,
+   147,
+   64
+  ]
+ },
+ {
+  "symbol": "PENGU",
+  "name": "Pudgy Penguins",
+  "cg": "pudgy-penguins",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv",
+  "category": "MEME",
+  "rank": 98,
+  "rgb": [
+   137,
+   174,
+   244
+  ]
+ },
+ {
+  "symbol": "TRUMP",
+  "name": "Official Trump",
+  "cg": "official-trump",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN",
+  "category": "MEME",
+  "rank": 104,
+  "rgb": [
+   218,
+   199,
+   135
+  ]
+ },
+ {
+  "symbol": "SPX",
+  "name": "SPX6900",
+  "cg": "spx6900",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xe0f63a424a4439cbe457d80e4f4b51ad25b2c56c",
+  "category": "MEME",
+  "rank": 126,
+  "rgb": [
+   217,
+   174,
+   72
+  ]
+ },
+ {
+  "symbol": "BONK",
+  "name": "Bonk",
+  "cg": "bonk",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+  "category": "MEME",
+  "rank": 142,
+  "rgb": [
+   241,
+   181,
+   4
+  ]
+ },
+ {
+  "symbol": "FLOKI",
+  "name": "FLOKI",
+  "cg": "floki",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xcf0c122c6b73ff809c693db761e7baebe62b6a2e",
+  "category": "MEME",
+  "rank": 158,
+  "rgb": [
+   228,
+   146,
+   38
+  ]
+ },
+ {
+  "symbol": "WIF",
+  "name": "dogwifhat",
+  "cg": "dogwifcoin",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
+  "category": "MEME",
+  "rank": 164,
+  "rgb": [
+   175,
+   123,
+   103
+  ]
+ },
+ {
+  "symbol": "FARTCOIN",
+  "name": "Fartcoin",
+  "cg": "fartcoin",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump",
+  "category": "MEME",
+  "rank": 196,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "CHEEMS",
+  "name": "Cheems Token",
+  "cg": "cheems-token",
+  "family": "EVM",
+  "network": "BEP-20 (BSC)",
+  "contract": "0x0df0587216a4a1bb7d5082fdc491d93d2dd4b413",
+  "category": "MEME",
+  "rank": 271,
+  "rgb": [
+   124,
+   92,
+   58
+  ]
+ },
+ {
+  "symbol": "MELANIA",
+  "name": "Melania Meme",
+  "cg": "melania-meme",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "FUAfBo2jgks6gB4Z4LfZkqSZgzNucisEHqnNebaRxM1P",
+  "category": "MEME",
+  "rank": 282,
+  "rgb": [
+   0,
+   229,
+   255
+  ]
+ },
+ {
+  "symbol": "BOME",
+  "name": "BOOK OF MEME",
+  "cg": "book-of-meme",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "ukHH6c7mMyiWCf1b9pnWe25TSpkDDt3H5pQZgZ74J82",
+  "category": "MEME",
+  "rank": 324,
+  "rgb": [
+   82,
+   132,
+   45
+  ]
+ },
+ {
+  "symbol": "BABYDOGE",
+  "name": "Baby Doge Coin",
+  "cg": "baby-doge-coin",
+  "family": "EVM",
+  "network": "BEP-20 (BSC)",
+  "contract": "0xc748673057861a797275cd8a068abb95a902e8de",
+  "category": "MEME",
+  "rank": 362,
+  "rgb": [
+   250,
+   217,
+   74
+  ]
+ },
+ {
+  "symbol": "TURBO",
+  "name": "Turbo",
+  "cg": "turbo",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xa35923162c49cf95e6bf26623385eb431ad920d3",
+  "category": "MEME",
+  "rank": 370,
+  "rgb": [
+   245,
+   212,
+   92
+  ]
+ },
+ {
+  "symbol": "POPCAT",
+  "name": "Popcat",
+  "cg": "popcat",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",
+  "category": "MEME",
+  "rank": 442,
+  "rgb": [
+   236,
+   221,
+   218
+  ]
+ },
+ {
+  "symbol": "PNUT",
+  "name": "Peanut the Squirrel",
+  "cg": "peanut-the-squirrel",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "2qEHjDLDLbuBgRYvsxhc5D6uDWAivNFZGan56P1tpump",
+  "category": "MEME",
+  "rank": 451,
+  "rgb": [
+   124,
+   174,
+   216
+  ]
+ },
+ {
+  "symbol": "BRETT",
+  "name": "Brett",
+  "cg": "based-brett",
+  "family": "EVM",
+  "network": "Base",
+  "contract": "0x532f27101965dd16442e59d40670faf5ebb142e4",
+  "category": "MEME",
+  "rank": 454,
+  "rgb": [
+   62,
+   189,
+   224
+  ]
+ },
+ {
+  "symbol": "TOSHI",
+  "name": "Toshi",
+  "cg": "toshi",
+  "family": "EVM",
+  "network": "Base",
+  "contract": "0xac1bd2486aaf3b5c0fc3fd868558b082a531b2b4",
+  "category": "MEME",
+  "rank": 459,
+  "rgb": [
+   6,
+   83,
+   248
+  ]
+ },
+ {
+  "symbol": "MOG",
+  "name": "Mog Coin",
+  "cg": "mog-coin",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0xaaee1a9723aadb7afa2810263653a34ba2c21c7a",
+  "category": "MEME",
+  "rank": 497,
+  "rgb": [
+   16,
+   30,
+   148
+  ]
+ },
+ {
+  "symbol": "PEOPLE",
+  "name": "ConstitutionDAO",
+  "cg": "constitutiondao",
+  "family": "EVM",
+  "network": "ERC-20 (ETH)",
+  "contract": "0x7a58c0be72be218b41c608b7fe7c5bb630736c71",
+  "category": "MEME",
+  "rank": 511,
+  "rgb": [
+   206,
+   179,
+   115
+  ]
+ },
+ {
+  "symbol": "MOODENG",
+  "name": "Moo Deng",
+  "cg": "moo-deng",
+  "family": "SOL",
+  "network": "SPL (Solana)",
+  "contract": "ED5nyyWEzpPPiWimP8vYm7sD7TD3LAt3Q3gRTWHzPJBY",
+  "category": "MEME",
+  "rank": 521,
+  "rgb": [
+   55,
+   107,
+   161
+  ]
+ },
+ {
+  "symbol": "MEME",
+  "name": "MEMETOON",
+  "cg": "memetoon",
+  "family": "EVM",
+  "network": "BEP-20 (BSC)",
+  "contract": "0x193397bb76868c6873e733ad60d5953843ebc84e",
+  "category": "MEME",
+  "rank": 999,
+  "rgb": [
+   220,
+   248,
+   165
+  ]
+ }
+]

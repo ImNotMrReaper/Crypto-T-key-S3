@@ -30,6 +30,7 @@ void RgbStatus::writeByte(uint8_t byte) {
 }
 
 void RgbStatus::sendFrame(uint8_t r, uint8_t g, uint8_t b, uint8_t brightness) {
+    lastR = r; lastG = g; lastB = b; lastBrightness = brightness;
     // 1. Start frame: 32 zero bits
     for (uint8_t i = 0; i < 4; i++) {
         writeByte(0x00);

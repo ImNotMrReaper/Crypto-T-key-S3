@@ -49,6 +49,9 @@ public:
     void setPixel(uint8_t r, uint8_t g, uint8_t b, uint8_t brightness = 4);
 
     static RgbColor getCoinRgb(const char* symbol);
+    // Last frame actually sent to the LED (diagnostics)
+    uint8_t lastR = 0, lastG = 0, lastB = 0, lastBrightness = 0;
+    LedMode currentMode() const { return _currentMode; }
 
 private:
     void sendFrame(uint8_t r, uint8_t g, uint8_t b, uint8_t brightness);

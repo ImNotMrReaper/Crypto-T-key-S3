@@ -13,6 +13,7 @@
 
 class UiEngine {
 public:
+    TFT_eSprite* sprite() { return _sprite; }   // test instrumentation (screen capture)
     void begin(TFT_eSPI* tft);
 
     // Core View Renders (Zero-Flicker Double Buffered)
