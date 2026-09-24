@@ -105,25 +105,44 @@ float CryptoCoinRegistry::getTotalPortfolioValueUsd() {
     return total;
 }
 
+// NVS "portfolio_v2": "sel" = comma-separated selected symbols (one entry, not one per coin),
+// "b_<SYM>" = balance, only for coins actually held. NVS is only 20 KB; keep it lean.
 void CryptoCoinRegistry::savePreferences() {
+    String sel;
+    for (int i = 0; i < COIN_REGISTRY_COUNT; i++) {
+        if (!_coins[i].enabled) continue;
+        if (sel.length()) sel += ",";
+        sel += _coins[i].symbol;
+    }
     Preferences prefs;
     if (!prefs.begin("portfolio_v2", false)) return;
+    if (prefs.getString("sel", "") != sel || !prefs.isKey("sel")) prefs.putString("sel", sel);
     for (int i = 0; i < COIN_REGISTRY_COUNT; i++) {
         char key[16];
-        snprintf(key, sizeof(key), "e_%s", _coins[i].symbol);
-        if (prefs.getBool(key, !_coins[i].enabled) != _coins[i].enabled) prefs.putBool(key, _coins[i].enabled);
         snprintf(key, sizeof(key), "b_%s", _coins[i].symbol);
-        if (_coins[i].balance > 0.0f || prefs.isKey(key)) {
+        if (_coins[i].balance > 0.0f) {
             if (prefs.getFloat(key, -1.0f) != _coins[i].balance) prefs.putFloat(key, _coins[i].balance);
+        } else if (prefs.isKey(key)) {
+            prefs.remove(key);
         }
     }
-    prefs.putBool("init", true);
     prefs.end();
 }
 
 void CryptoCoinRegistry::loadPreferences() {
     Preferences prefs;
-    if (prefs.begin("portfolio_v2", true) && prefs.getBool("init", false)) {
+    prefs.begin("portfolio_v2", false);
+    bool have = prefs.isKey("sel");
+    if (have) {
+        String sel = "," + prefs.getString("sel", "") + ",";
+        for (int i = 0; i < COIN_REGISTRY_COUNT; i++) {
+            char key[16];
+            _coins[i].enabled = sel.indexOf(String(",") + _coins[i].symbol + ",") >= 0;
+            snprintf(key, sizeof(key), "b_%s", _coins[i].symbol);
+            _coins[i].balance = prefs.getFloat(key, 0.0f);
+        }
+    } else if (prefs.getBool("init", false)) {
+        // Interim per-coin layout (e_<SYM> for every coin): read it, then rewrite compactly
         for (int i = 0; i < COIN_REGISTRY_COUNT; i++) {
             char key[16];
             snprintf(key, sizeof(key), "e_%s", _coins[i].symbol);
@@ -131,29 +150,38 @@ void CryptoCoinRegistry::loadPreferences() {
             snprintf(key, sizeof(key), "b_%s", _coins[i].symbol);
             _coins[i].balance = prefs.getFloat(key, 0.0f);
         }
-        prefs.end();
-        return;
+        prefs.clear();
+        have = true;
     }
     prefs.end();
 
-    // First boot on the catalog: carry over the selection from the old index-keyed registry
-    if (prefs.begin("portfolio_sec", true)) {
-        bool any = false;
-        for (size_t i = 0; i < sizeof(LEGACY_ORDER) / sizeof(LEGACY_ORDER[0]); i++) {
-            char keyEn[16], keyBal[16];
-            snprintf(keyEn, sizeof(keyEn), "en_%d", (int)i);
-            snprintf(keyBal, sizeof(keyBal), "bal_%d", (int)i);
-            if (!prefs.isKey(keyEn)) continue;
-            if (!any) {
-                for (int k = 0; k < COIN_REGISTRY_COUNT; k++) _coins[k].enabled = false;
-                any = true;
+    if (!have) {
+        // First boot on the catalog: carry over the selection from the old index-keyed registry
+        if (prefs.begin("portfolio_sec", false)) {
+            bool any = false;
+            for (size_t i = 0; i < sizeof(LEGACY_ORDER) / sizeof(LEGACY_ORDER[0]); i++) {
+                char keyEn[16], keyBal[16];
+                snprintf(keyEn, sizeof(keyEn), "en_%d", (int)i);
+                snprintf(keyBal, sizeof(keyBal), "bal_%d", (int)i);
+                if (!prefs.isKey(keyEn)) continue;
+                if (!any) {
+                    for (int k = 0; k < COIN_REGISTRY_COUNT; k++) _coins[k].enabled = false;
+                    any = true;
+                }
+                CoinAsset* c = findBySymbol(LEGACY_ORDER[i]);
+                if (!c) continue;   // coin no longer in the curated catalog
+                c->enabled = prefs.getBool(keyEn, false);
+                c->balance = prefs.getFloat(keyBal, 0.0f);
             }
-            CoinAsset* c = findBySymbol(LEGACY_ORDER[i]);
-            if (!c) continue;   // coin no longer in the curated catalog
-            c->enabled = prefs.getBool(keyEn, false);
-            c->balance = prefs.getFloat(keyBal, 0.0f);
+            prefs.end();
         }
-        prefs.end();
     }
     savePreferences();
+    // The old namespace is fully migrated: free its ~88 NVS entries
+    if (prefs.begin("portfolio_sec", true)) {   // read-only open fails if it no longer exists
+        prefs.end();
+        prefs.begin("portfolio_sec", false);
+        prefs.clear();
+        prefs.end();
+    }
 }

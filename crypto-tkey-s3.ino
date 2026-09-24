@@ -18,6 +18,7 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <Preferences.h>
+#include <nvs.h>
 #include "USB.h"
 #include <WiFi.h>
 #include "soc/soc.h"
@@ -47,6 +48,7 @@ __attribute__((constructor(101))) void pre_init_early() {
 #include "src/psbt_signer.h"
 #include "src/evm_decoder.h"
 #include "src/sd_vault.h"
+#include "src/ui_theme.h"
 #include "src/wallet_families.h"
 #include "src/bip32_engine.h"
 #include <mbedtls/platform_util.h>
@@ -118,18 +120,42 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
 void renderCurrentPortfolioCard();
 void showReceiveScreen(const char* symbol, const char* hint);
 
+void showPortalScreen() {
+    vaultPrefs.begin("vault_sec", true);
+    bool provisioned = vaultPrefs.getBool("provisioned", false);
+    vaultPrefs.end();
+    ui.renderPortalScreen(portal->apSsid(), portal->apPass(), portal->wifiQr(),
+                          provisioned ? "HOLD 3s: EXIT" : "SCAN TO JOIN");
+}
+
 void launchSetupPortal() {
     vaultPrefs.begin("vault_sec", true);
     bool isProvisioned = vaultPrefs.getBool("provisioned", false);
-    String setupPwdHash = vaultPrefs.getString("setup_pwd_hash", "");
     vaultPrefs.end();
 
     deviceState = STATE_SETUP_WALKTHROUGH;
     if (wifi) wifi->setPortalActive(true);
-    portal->begin(wallet, wifi, isProvisioned, setupPwdHash.c_str());
-    ui.renderOobeWizard(1, "T-KEY SETUP", "SSID: T-Key-Setup", "GO TO: 192.168.4.1");
+    portal->begin(wallet, wifi, isProvisioned);
+    showPortalScreen();
     rgb.setMode(LED_MODE_SOFTAP_PULSE);
-    Serial.println("[SETUP] 🌐 SoftAP Setup Portal active at http://192.168.4.1 (SSID: T-Key-Setup)");
+}
+
+// Leaves the setup portal: radio off, back to the home screen.
+void closeSetupPortal(bool saved) {
+    portal->stop();
+    if (wifi) wifi->setPortalActive(false);
+    if (saved) {
+        masterPinLen = PinVault::length();
+        if (wallet) wallet->refreshFamilies();   // addresses only for the selected coins
+        PortfolioManager::resetIndex();
+        rgb.flashRainbow(800);
+        ui.renderSuccessBanner("SETTINGS SAVED", "WI-FI OFF");
+        delay(1500);
+    }
+    deviceState = STATE_IDLE_READY;
+    rgb.setMode(LED_MODE_BREATHE_CYAN);
+    const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
+    ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
 }
 
 // ─── Setup ───────────────────────────────────────────────────────────────────
@@ -191,6 +217,7 @@ void setup() {
 
     // 7. Portfolio & Seed Engines
     PortfolioManager::init();
+    homeTheme.load();
     SeedGenerator::init();
     wifi = new WifiManager();
     wifi->begin();
@@ -227,34 +254,8 @@ void loop() {
 
     if (portal && portal->isRunning()) {
         portal->update();
-        if (portal->isSetupDone()) {
-            if (!PinVault::setPin(portal->getNewPin())) {
-                Serial.println("[SETUP] ⚠️ PIN rejected (4-8 digits); keeping the previous PIN");
-            }
-            if (!PinVault::setDuressPin(portal->getNewDuressPin())) {
-                Serial.println("[SETUP] ⚠️ Duress PIN rejected (4-8 digits, must differ from the PIN)");
-            }
-            masterPinLen = PinVault::length();
-
-            vaultPrefs.begin("vault_sec", false);
-            if (strlen(portal->getSetupPasswordHash()) > 0) {
-                vaultPrefs.putString("setup_pwd_hash", portal->getSetupPasswordHash());
-            }
-            vaultPrefs.putBool("provisioned", true);
-            vaultPrefs.end();
-
-            portal->stop();
-            if (wifi) wifi->setPortalActive(false);
-            if (wallet) wallet->refreshFamilies();   // addresses only for the newly selected coins
-            rgb.flashRainbow(800);
-            ui.renderSuccessBanner("VAULT PROVISIONED", "LAUNCHING KEY");
-            delay(1500);
-
-            deviceState = STATE_IDLE_READY;
-            rgb.setMode(LED_MODE_BREATHE_CYAN);
-            const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
-            ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
-        }
+        if (portal->isSetupDone()) closeSetupPortal(true);
+        else if (portal->isExitRequested()) closeSetupPortal(false);
     }
 
     bool userActive = (ev != BTN_NONE);
@@ -275,20 +276,18 @@ void loop() {
     }
 
     switch (deviceState) {
-        case STATE_SETUP_WALKTHROUGH:
-            // ── MANDATORY SETUP — CANNOT BE SKIPPED OR BYPASSED ──────────────
-            // The device will not enter any operational state until first-time
-            // setup is fully completed via the captive portal at 192.168.4.1.
-            // No button combination can dismiss or bypass this requirement.
-            if (ev == BTN_LONG_PRESS) {
-                // Show mandatory reminder and return to portal screen
-                rgb.flashRainbow(400);
-                ui.renderOobeWizard(1, "SETUP REQUIRED", "Visit 192.168.4.1", "Cannot skip setup");
-                delay(2200);
-                rgb.setMode(LED_MODE_SOFTAP_PULSE);
-                ui.renderOobeWizard(1, "T-KEY SETUP", "SSID: T-Key-Setup", "GO TO: 192.168.4.1");
+        case STATE_SETUP_WALKTHROUGH: {
+            // First-time setup can't be skipped; an already set-up key can leave without saving.
+            if (ev == BTN_VERY_LONG_PRESS) {
+                vaultPrefs.begin("vault_sec", true);
+                bool provisioned = vaultPrefs.getBool("provisioned", false);
+                vaultPrefs.end();
+                if (provisioned) closeSetupPortal(false);
+            } else if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS) {
+                showPortalScreen();   // redraw (e.g. after the display woke up)
             }
             break;
+        }
         case STATE_IDLE_READY:
             processIdleReadyState(ev);
             break;
@@ -1021,12 +1020,15 @@ void handleSerialCommands() {
         Serial.println("[VAULT] Serial unlock is disabled; enter the PIN on the device.");
 #endif
     } else if (cmd.equalsIgnoreCase("diag")) {
+        nvs_stats_t nvs = {};
+        nvs_get_stats(NULL, &nvs);
         Serial.printf("DIAG state=%d uptime=%lus heap=%u minheap=%u reset=%d wifimode=%d usbhost=%d "
-                      "loopstack=%u led=%u,%u,%u@%u mode=%d sleeping=%d\n",
+                      "loopstack=%u led=%u,%u,%u@%u mode=%d sleeping=%d nvsused=%u nvsfree=%u\n",
                       (int)deviceState, millis() / 1000, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
                       (int)esp_reset_reason(), (int)WiFi.getMode(), (int)(bool)USB,
                       (unsigned)uxTaskGetStackHighWaterMark(nullptr), rgb.lastR, rgb.lastG, rgb.lastB,
-                      rgb.lastBrightness, (int)rgb.currentMode(), (int)PowerManager::isDisplaySleeping());
+                      rgb.lastBrightness, (int)rgb.currentMode(), (int)PowerManager::isDisplaySleeping(),
+                      (unsigned)nvs.used_entries, (unsigned)nvs.free_entries);
 #ifdef TKEY_TEST_SERIAL_TOUCH
     } else if (cmd.startsWith("btn ")) {
         String b = cmd.substring(4);
@@ -1057,6 +1059,27 @@ void handleSerialCommands() {
             if (o) { out[o] = '\0'; Serial.println(out); }
             Serial.println("SHOT END");
         }
+    } else if (cmd.equalsIgnoreCase("portal")) {
+        launchSetupPortal();   // test builds: same as holding the button while plugging in
+        Serial.println("[TEST] setup portal launched");
+    } else if (cmd.equalsIgnoreCase("nvsdump")) {
+        // Entries per namespace (sizes only, never values)
+        nvs_iterator_t it = nullptr;
+        char names[24][16];
+        int counts[24] = {0}, kinds = 0;
+        esp_err_t e = nvs_entry_find(NVS_DEFAULT_PART_NAME, NULL, NVS_TYPE_ANY, &it);
+        while (e == ESP_OK) {
+            nvs_entry_info_t info;
+            nvs_entry_info(it, &info);
+            int k = 0;
+            while (k < kinds && strcmp(names[k], info.namespace_name) != 0) k++;
+            if (k == kinds && kinds < 24) { strncpy(names[kinds], info.namespace_name, 15); names[kinds][15] = 0; kinds++; }
+            if (k < 24) counts[k]++;
+            e = nvs_entry_next(&it);
+        }
+        nvs_release_iterator(it);
+        for (int k = 0; k < kinds; k++) Serial.printf("NVS %s keys=%d\n", names[k], counts[k]);
+        Serial.println("NVS END");
     } else if (cmd.startsWith("famtest ")) {
         // Derive every wallet family for a given (test) mnemonic; compared with bip_utils vectors
         String m = cmd.substring(8);

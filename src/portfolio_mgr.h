@@ -26,6 +26,7 @@ public:
     // Command processing for USB Bridge & Serial
     static bool processCommand(const String& cmd, String& response);
 
+    static void resetIndex() { _currentActiveIdx = 0; }
 private:
     static int _currentActiveIdx;
     static uint32_t _lastPriceUpdateMs;

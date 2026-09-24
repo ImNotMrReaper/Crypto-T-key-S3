@@ -7,6 +7,16 @@
 #include "USB.h"
 
 void WifiManager::begin() {
+    // Our networks live in "wifi_cfg"; the driver's own copy of every AP/STA config
+    // ("nvs.net80211") only duplicated credentials and filled the 20 KB NVS partition.
+    WiFi.persistent(false);
+    Preferences drv;
+    if (drv.begin("nvs.net80211", true)) {
+        drv.end();
+        drv.begin("nvs.net80211", false);
+        drv.clear();
+        drv.end();
+    }
     loadFromNvs();
     _bootMs = millis();
     radioOff();  // decided in update(): off on a computer, bursts on wall power

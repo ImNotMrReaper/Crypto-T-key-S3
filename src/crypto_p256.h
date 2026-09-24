@@ -50,6 +50,11 @@ public:
     // authenticatorReset: replace the master secret, invalidating every credential ever issued
     bool rotateMasterSecret();
 
+    // Per-device attestation key + self-signed X.509 certificate (packed / U2F).
+    // Generated on first use from the hardware RNG and kept in NVS "fido_vault";
+    // nothing about it is in the source. The cert carries the AAGUID extension.
+    bool attestation(const uint8_t aaguid[16], const uint8_t** key32, const uint8_t** certDer, size_t* certLen);
+
     // Monotonic Replay Protection Counter
     uint32_t getSignatureCounter();
     uint32_t incrementSignatureCounter();
@@ -60,7 +65,11 @@ public:
 
 private:
     bool loadOrGenerateMasterSecret();
+    bool generateAttestation(const uint8_t aaguid[16]);
     uint8_t _masterSecret[32];
+    uint8_t _attKey[32];
+    uint8_t _attCert[640];
+    size_t  _attCertLen = 0;
     uint32_t _sigCounter;
     bool _initialized;
 };

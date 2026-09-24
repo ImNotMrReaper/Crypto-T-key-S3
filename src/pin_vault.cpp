@@ -76,7 +76,7 @@ PinVault::Result PinVault::check(const char* pin) {
     uint8_t h[32];
     hashPin(pin, h);
     bool master = ctEqual(h, s_pinHash, 32);
-    bool duress = s_hasDuress ? ctEqual(h, s_duressHash, 32) : (strcmp(pin, EMERGENCY_DURESS_PIN) == 0);
+    bool duress = s_hasDuress && ctEqual(h, s_duressHash, 32);   // no duress PIN unless the user set one
     mbedtls_platform_zeroize(h, sizeof(h));
 
     Preferences prefs;
@@ -137,6 +137,10 @@ bool PinVault::setDuressPin(const char* pin) {
     prefs.putBytes("duress_hash", s_duressHash, sizeof(s_duressHash));
     prefs.end();
     return true;
+}
+
+bool PinVault::hasDuress() {
+    return s_hasDuress;
 }
 
 uint8_t PinVault::length() {

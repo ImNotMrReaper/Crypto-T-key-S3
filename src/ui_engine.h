@@ -28,6 +28,8 @@ public:
     // Receive screen: QR code of `qrText` on the left, network + wrapped address on the right.
     void renderReceiveScreen(const char* symbol, const char* network, const char* address,
                              const char* qrText, const char* hint);
+    // Setup portal: Wi-Fi join QR on the left, network name + password on the right.
+    void renderPortalScreen(const char* ssid, const char* pass, const char* qrText, const char* hint);
     void renderPortfolioCard(const char* symbol, const char* name, float balance, float priceUsd, float change24h, int activeIdx, int totalActive, float totalPortfolioUsd, bool isLive = false);
     void renderSeedBackupScreen(int wordNum, int totalWords, const char* word);
     void renderSeedWordsView(int wordNum, int totalWords, const char* word);

@@ -21,8 +21,9 @@ public:
     static void begin();
     static Result check(const char* pin);
     static bool setPin(const char* pin);
-    // Empty or null disables the user duress PIN (the built-in EMERGENCY_DURESS_PIN is then used).
+    // Empty or null removes the duress PIN (there is no built-in one).
     static bool setDuressPin(const char* pin);
+    static bool hasDuress();
     static uint8_t length();          // digits in the master PIN (the PIN screen needs it)
     static uint8_t attemptsLeft();
 

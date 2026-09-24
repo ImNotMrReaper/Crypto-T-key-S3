@@ -48,7 +48,6 @@
 #define PIN_MAX_LENGTH         8
 #define PIN_LENGTH             PIN_MAX_LENGTH  // Max buffer size
 #define DEFAULT_MASTER_PIN     "1234"          // Default master PIN for vault setup
-#define EMERGENCY_DURESS_PIN   "9999"          // Triggers immediate flash scrub + decoy crash
 
 // ─── Cyberpunk / Antigravity UI Palette (RGB565) ─────────────────────────────
 #define COLOR_BG               0x0000   // True OLED Pitch Black

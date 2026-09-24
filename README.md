@@ -23,6 +23,10 @@
 - Offline Bitcoin PSBT signing from MicroSD, and clear-signing prompts for EVM transactions.
 - Live portfolio: prices come from the host daemon while on USB, or from duty-cycled Wi-Fi bursts when on a wall charger. The radio is off whenever a computer is attached.
 
+**Setup page**
+- Hold the button while plugging in. The key opens a WPA2 Wi-Fi network whose password (and join QR) appears only on its screen.
+- There you set the PIN, the optional duress PIN, the setup password, your coins, the home colour and LED effect, and Wi-Fi for wall power.
+
 **Device**
 - Single-button interface, 80 MHz idle clock, display sleep, and panic-hold zeroization.
 
@@ -83,6 +87,7 @@ Host setup (udev rules for browsers, including Snap Firefox): `host/install_host
 | `tools/test_webauthn_io.py` | webauthn.io end-to-end |
 | `tools/test_wallet_hw.py` | Wallet derivation and signing (test firmware) |
 | `tools/test_device_walkthrough.py` | Screen walkthrough, QR decode, soak (test firmware) |
+| `tools/preview_portal.py` | Setup page in a desktop browser with a mock device API |
 
 Test builds are compiled with `-DTKEY_TEST_SERIAL_TOUCH`; never leave one on a device you use.
 

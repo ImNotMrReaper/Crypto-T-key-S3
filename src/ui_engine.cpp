@@ -439,6 +439,40 @@ void UiEngine::renderReceiveScreen(const char* symbol, const char* network, cons
     _sprite->pushSprite(0, 0);
 }
 
+void UiEngine::renderPortalScreen(const char* ssid, const char* pass, const char* qrText, const char* hint) {
+    if (!_sprite) return;
+    _sprite->fillSprite(COLOR_BG);
+    s_qrSprite = _sprite;
+    s_qrBox = DISP_H;
+    s_qrDrawn = false;
+    esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+    cfg.display_func = drawQrToSprite;
+    cfg.max_qrcode_version = 5;
+    cfg.qrcode_ecc_level = ESP_QRCODE_ECC_LOW;
+    esp_qrcode_generate(&cfg, qrText);
+    if (!s_qrDrawn) _sprite->drawRect(0, 0, DISP_H, DISP_H, 0x4208);
+
+    const int x0 = DISP_H + 3;
+    _sprite->fillRoundRect(x0, 1, 44, 11, 2, COLOR_NEON_CYAN);
+    _sprite->setTextDatum(MC_DATUM);
+    _sprite->setTextColor(0x0000, COLOR_NEON_CYAN);
+    _sprite->drawString("SETUP", x0 + 22, 6, 1);
+
+    _sprite->setTextDatum(TL_DATUM);
+    _sprite->setTextColor(0x8410, COLOR_BG);
+    _sprite->drawString("WI-FI", x0, 15, 1);
+    _sprite->setTextColor(0xFFFF, COLOR_BG);
+    _sprite->drawString(ssid, x0, 24, 1);
+    _sprite->setTextColor(0x8410, COLOR_BG);
+    _sprite->drawString("PASSWORD", x0, 36, 1);
+    _sprite->setTextColor(COLOR_CYBER_GOLD, COLOR_BG);
+    _sprite->drawString(pass, x0, 45, 1);
+    _sprite->setTextColor(0x8410, COLOR_BG);
+    _sprite->drawString("192.168.4.1", x0, 58, 1);
+    _sprite->drawString(hint ? hint : "", x0, 70, 1);
+    _sprite->pushSprite(0, 0);
+}
+
 void UiEngine::renderWalletScreen(const char* coinName, const char* symbol, const char* address, const char* path) {
     if (!_sprite) return;
     _sprite->fillSprite(COLOR_BG);

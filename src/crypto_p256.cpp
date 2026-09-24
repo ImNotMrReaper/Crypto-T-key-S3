@@ -6,6 +6,8 @@
 #include <mbedtls/md.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/platform_util.h>
+#include <mbedtls/pk.h>
+#include <mbedtls/x509_crt.h>
 
 CryptoP256 cryptoP256;
 
@@ -427,4 +429,93 @@ uint32_t CryptoP256::incrementSignatureCounter() {
     prefs.putUInt("sig_counter", _sigCounter);
     prefs.end();
     return _sigCounter;
+}
+
+// ─── Per-device attestation ─────────────────────────────────────────────────
+
+static int attRng(void*, unsigned char* out, size_t len) {
+    CryptoP256::secureRandom(out, len);
+    return 0;
+}
+
+bool CryptoP256::attestation(const uint8_t aaguid[16], const uint8_t** key32, const uint8_t** certDer, size_t* certLen) {
+    if (!_attCertLen) {
+        Preferences prefs;
+        prefs.begin("fido_vault", true);
+        size_t n = prefs.getBytesLength("att_cert");
+        if (n > 0 && n <= sizeof(_attCert) && prefs.getBytesLength("att_key") == 32) {
+            prefs.getBytes("att_key", _attKey, 32);
+            _attCertLen = prefs.getBytes("att_cert", _attCert, n);
+        }
+        prefs.end();
+        if (!_attCertLen && !generateAttestation(aaguid)) return false;
+    }
+    *key32 = _attKey;
+    *certDer = _attCert;
+    *certLen = _attCertLen;
+    return true;
+}
+
+bool CryptoP256::generateAttestation(const uint8_t aaguid[16]) {
+    mbedtls_pk_context pk;
+    mbedtls_x509write_cert crt;
+    mbedtls_mpi d;
+    mbedtls_ecp_group grp;
+    mbedtls_ecp_point Q;
+    mbedtls_pk_init(&pk);
+    mbedtls_x509write_crt_init(&crt);
+    mbedtls_mpi_init(&d);
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_ecp_point_init(&Q);
+    static uint8_t buf[768];
+    int len = -1;
+
+    bool ok = mbedtls_pk_setup(&pk, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY)) == 0 &&
+              mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1, mbedtls_pk_ec(pk), attRng, nullptr) == 0 &&
+              mbedtls_ecp_export(mbedtls_pk_ec(pk), &grp, &d, &Q) == 0 &&
+              mbedtls_mpi_write_binary(&d, _attKey, 32) == 0;
+    if (ok) {
+        // WebAuthn packed attestation cert requirements: v3, C/O/OU/CN, CA:FALSE, AAGUID extension
+        static const char* DN = "C=US,O=Crypto T-Key S3,OU=Authenticator Attestation,CN=Crypto T-Key S3 Device";
+        static const uint8_t AAGUID_OID[] = {0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0xE5, 0x1C, 0x01, 0x01, 0x04};
+        uint8_t ext[18] = {0x04, 0x10};
+        memcpy(ext + 2, aaguid, 16);
+        uint8_t serial[16];
+        secureRandom(serial, sizeof(serial));
+        serial[0] &= 0x7F;   // positive INTEGER
+        serial[0] |= 0x01;   // no leading zero byte
+        mbedtls_x509write_crt_set_version(&crt, MBEDTLS_X509_CRT_VERSION_3);
+        mbedtls_x509write_crt_set_md_alg(&crt, MBEDTLS_MD_SHA256);
+        mbedtls_x509write_crt_set_subject_key(&crt, &pk);
+        mbedtls_x509write_crt_set_issuer_key(&crt, &pk);
+        ok = mbedtls_x509write_crt_set_subject_name(&crt, DN) == 0 &&
+             mbedtls_x509write_crt_set_issuer_name(&crt, DN) == 0 &&
+             mbedtls_x509write_crt_set_serial_raw(&crt, serial, sizeof(serial)) == 0 &&
+             mbedtls_x509write_crt_set_validity(&crt, "20240101000000", "20540101000000") == 0 &&
+             mbedtls_x509write_crt_set_basic_constraints(&crt, 0, -1) == 0 &&
+             mbedtls_x509write_crt_set_extension(&crt, (const char*)AAGUID_OID, sizeof(AAGUID_OID), 0, ext, sizeof(ext)) == 0;
+        if (ok) len = mbedtls_x509write_crt_der(&crt, buf, sizeof(buf), attRng, nullptr);
+        ok = len > 0 && (size_t)len <= sizeof(_attCert);
+    }
+    if (ok) {
+        memcpy(_attCert, buf + sizeof(buf) - len, len);   // DER is written at the end of the buffer
+        _attCertLen = len;
+        Preferences prefs;
+        prefs.begin("fido_vault", false);
+        ok = prefs.putBytes("att_key", _attKey, 32) == 32 && prefs.putBytes("att_cert", _attCert, len) == (size_t)len;
+        prefs.end();
+        Serial.printf("[FIDO] Generated this device's attestation key + certificate (%d bytes)\n", len);
+    }
+    if (!ok) {
+        _attCertLen = 0;
+        mbedtls_platform_zeroize(_attKey, sizeof(_attKey));
+        Serial.println("[FIDO] Attestation certificate generation failed");
+    }
+    mbedtls_platform_zeroize(buf, sizeof(buf));
+    mbedtls_mpi_free(&d);
+    mbedtls_ecp_point_free(&Q);
+    mbedtls_ecp_group_free(&grp);
+    mbedtls_x509write_crt_free(&crt);
+    mbedtls_pk_free(&pk);
+    return ok;
 }
