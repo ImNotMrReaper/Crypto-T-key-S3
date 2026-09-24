@@ -8,7 +8,7 @@ This project is security-sensitive embedded software and is not represented as i
 
 ## Supported security baseline
 
-Use the latest commit on the default branch only after reviewing its changes. There are currently no tagged security releases. Firmware builds should be made from a pinned commit with a recorded toolchain, board package version, library set, and SHA-256 hash of the resulting binary.
+Only the latest commit on the default branch is supported; review its changes first. There are no tagged security releases yet. Record the toolchain, board package, library versions and the SHA-256 of any firmware you build. Known gaps and their status are tracked in [`docs/SECURITY-AUDIT.md`](docs/SECURITY-AUDIT.md).
 
 ## Reporting a vulnerability
 
@@ -36,4 +36,4 @@ Treat these areas as especially sensitive:
 
 ## User safety
 
-Never run the production eFuse tool unless you have a tested recovery path and have confirmed the exact chip, bootloader, partition table, signing keys, and firmware image. eFuse changes are irreversible and can permanently disable development or recovery access.
+`tools/burn_production_efuses.py` is read-only: it cannot burn eFuses. Follow the hardening sequence it prints, on a spare unit first. eFuse changes are irreversible, and burning flash-encryption fuses by hand bricks the chip.

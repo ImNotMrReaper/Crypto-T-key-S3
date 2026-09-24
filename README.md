@@ -1,80 +1,102 @@
 # Crypto T-Key S3
 
-**Crypto T-Key S3** is an ESP32-S3 hardware security key and offline cryptocurrency vault for the LilyGo T-Dongle S3.
+**A FIDO2 / WebAuthn security key and PIN-gated crypto wallet on a USB stick** — firmware for the
+[LilyGo T-Dongle S3](https://github.com/Xinyuan-LilyGO/T-Dongle-S3) (ESP32-S3, 0.96" 160×80 TFT, RGB LED, one button, MicroSD).
 
-> **Security status:** This is security-sensitive embedded software. Treat it as experimental until you have independently reviewed the source, built the firmware reproducibly, and tested it on hardware. Never use it to protect funds or credentials you cannot afford to lose.
+> **Security status — experimental.** Flash encryption and Secure Boot are **not** enabled yet, so anyone
+> holding the dongle can read its flash. Do not use it as the only key for accounts you can't recover, or for
+> funds you can't afford to lose. Read [`docs/SECURITY-AUDIT.md`](docs/SECURITY-AUDIT.md) first.
 
-## What it does
+## Features
 
-- FIDO2/WebAuthn and CTAP2 authentication over USB HID.
-- Physical user-presence confirmation for passkey operations.
-- On-device PIN-gated cryptocurrency wallet workflows.
-- BIP-39 seed generation and on-device verification.
-- Bitcoin PSBT parsing and signing from MicroSD.
-- EVM transaction decoding and clear-signing prompts.
-- Encrypted MicroSD vault containers using AES-256-GCM.
-- Duress and panic zeroization workflows.
-- Low-power, USB-aware Wi-Fi bursts for optional portfolio data.
+**Security key**
+- CTAP2.0 + U2F over USB HID. Works with Chrome, Firefox (incl. Snap), `ssh-keygen -t ecdsa-sk`, `pam_u2f`, and `fido2-token`.
+- Resident / discoverable credentials (passkeys), FIDO client PIN (protocol 1), and packed self-attestation.
+- The `hmac-secret` extension, so it can unlock LUKS volumes via `systemd-cryptenroll --fido2-device`.
+- Every operation needs a physical button press, with the relying-party name shown on the screen. If the requesting host goes away, the prompt is cancelled.
+- True-random keys: the hardware RNG entropy source is enabled around every draw.
 
-## What was upgraded in this repository
+**Wallet**
+- On-device BIP-39 seed generation with a verification quiz, stored AES-256-GCM encrypted.
+- The PIN is kept as a salted PBKDF2 hash. There's a 10-attempt lockout and a duress PIN.
+- Receive addresses shown as QR codes: Bitcoin (bc1), Ethereum/EVM, Solana and Dogecoin.
+- Offline Bitcoin PSBT signing from MicroSD, and clear-signing prompts for EVM transactions.
+- Live portfolio: prices come from the host daemon while on USB, or from duty-cycled Wi-Fi bursts when on a wall charger. The radio is off whenever a computer is attached.
 
-- Unified project branding under **Crypto T-Key S3**.
-- Added a security policy and responsible-disclosure guidance.
-- Added a documented security audit with prioritized findings, limitations, and release gates.
-- Documented the trust boundaries, threat model, secure-build expectations, and operational warnings.
-- Clarified that the firmware is not independently certified and that the eFuse tool is irreversible.
-- Improved build and flashing documentation so production and development workflows are easier to distinguish.
+**Device**
+- Single-button interface, 80 MHz idle clock, display sleep, and panic-hold zeroization.
+
+## Controls
+
+| Gesture | Timing | Typical action |
+| :--- | :--- | :--- |
+| Tap | < 600 ms | Next / +1 / approve a FIDO prompt |
+| Double tap | two taps < 320 ms apart | Back / delete |
+| Long press | 600 – 2200 ms | Confirm / enter PIN screen |
+| Very long press | 2.2 – 6 s | Reset / receive QR on the price screen |
+| Panic hold | > 6 s | Emergency zeroization |
+
+The first press after the display sleeps only wakes it.
+
+## Hardware map
+
+| Function | GPIO | Notes |
+| :--- | :--- | :--- |
+| TFT CS / DC / RST | 4 / 2 / 1 | ST7735, SPI |
+| TFT MOSI / SCLK | 3 / 5 | |
+| TFT backlight | 38 | active **LOW** |
+| RGB LED | 40 (data), 39 (clock) | APA102 |
+| Button | 0 | BOOT, active LOW |
+| MicroSD | CLK 12, CMD 16, D0–D3 14/17/21/18 | SD_MMC 4-bit |
+
+USB: Espressif VID `0x303A`, composite HID (FIDO) + CDC serial.
 
 ## Repository layout
 
-- `crypto-tkey-s3.ino` — firmware entry point and device state machine.
-- `src/` — FIDO2, wallet, PIN, vault, display, Wi-Fi, and signing subsystems.
-- `host/` — host integration files and udev rules.
-- `tools/` — hardware tests, companion utilities, and production tooling.
-- `arduino_forge.py` — compile, flash, monitor, device detection, and pin-map CLI.
-- `docs/SECURITY-AUDIT.md` — security review and remediation plan.
-- `SECURITY.md` — supported versions and vulnerability-reporting policy.
+| Path | Contents |
+| :--- | :--- |
+| `crypto-tkey-s3.ino` | Entry point and device state machine |
+| `src/` | CTAP2/CTAPHID, CBOR, P-256, FIDO store, PIN vault, BIP-32/39 wallet, PSBT/EVM, UI, LED, Wi-Fi, SD vault |
+| `host/` | udev rules, `install_host.sh`, PAM helper |
+| `tools/` | Flash script, hardware test suites, portfolio daemon, coin-catalog generator, eFuse inspector |
+| `arduino_forge.py`, `Makefile` | Compile / flash / monitor CLI |
 
 ## Build and flash
 
-Install Arduino CLI, the ESP32 Arduino core, and the libraries required by the source tree. Then run:
+Requires `arduino-cli` with the ESP32 core and the libraries used in `src/` (TFT_eSPI, Crypto, micro-ecc, ArduinoJson).
 
 ```bash
-# Compile only; preferred first step for every change
-make compile
-
-# Detect a connected T-Dongle S3
-make detect
-
-# Show the board pin map
-make pins
-
-# Flash a development device
-make flash
-
-# Open the diagnostic monitor
-make monitor
+make compile                 # compile only
+make flash                   # compile + upload (auto-detects the dongle)
+make monitor                 # serial console
+tools/flash_app.sh           # upload the app image via the 1200-baud bootloader reset
 ```
 
-Do not burn production eFuses during development. The eFuse tool is intentionally separate and must be reviewed against the exact bootloader, partition table, signing keys, and recovery process for the device being secured.
+Host setup (udev rules for browsers, including Snap Firefox): `host/install_host.sh`.
 
-## Security-critical operating rules
+### Tests
 
-1. Provision a strong, unique master PIN and setup password; do not use example values.
-2. Verify transaction recipient, network, amount, and fee on the physical display before signing.
-3. Keep recovery words offline and never paste them into an issue, chat, serial log, browser, or host script.
-4. Treat a connected computer and MicroSD card as untrusted inputs.
-5. Use a dedicated test device until independent review and hardware testing are complete.
-6. Make and test recovery backups before enabling any irreversible hardware hardening.
-7. Review `docs/SECURITY-AUDIT.md` before describing a build as production-ready.
+| Script | What it covers |
+| :--- | :--- |
+| `tools/test_fido2_hw.py` | CTAP2 makeCredential/getAssertion/PIN on real hardware |
+| `tools/test_hmac_secret_hw.py` | hmac-secret outputs |
+| `tools/test_webauthn_io.py` | webauthn.io end-to-end |
+| `tools/test_wallet_hw.py` | Wallet derivation and signing (test firmware) |
+| `tools/test_device_walkthrough.py` | Screen walkthrough, QR decode, soak (test firmware) |
 
-## Project identity
+Test builds are compiled with `-DTKEY_TEST_SERIAL_TOUCH`; never leave one on a device you use.
 
-- Display name: **Crypto T-Key S3**
-- Suggested GitHub slug: `Crypto-T-key-S3`
-- Hardware: LilyGo T-Dongle S3 / ESP32-S3
-- Primary language: C++
+## Security
+
+- Policy and reporting: [`SECURITY.md`](SECURITY.md)
+- Audit, known gaps and hardening roadmap: [`docs/SECURITY-AUDIT.md`](docs/SECURITY-AUDIT.md)
+
+Operating rules:
+1. Check the relying party, or the recipient, amount and network, on the device screen before pressing.
+2. Keep your recovery words offline. Never type them into a computer, issue, chat or serial console.
+3. Register a second authenticator on every account, so losing the dongle doesn't lock you out.
+4. Don't run eFuse tooling until the hardening roadmap in the audit is complete; eFuses are irreversible.
 
 ## License
 
-No license is currently declared. Until a license is added, normal copyright restrictions apply; do not assume that the code may be redistributed or used commercially.
+No license has been chosen yet, so default copyright applies. Please ask before reusing the code.

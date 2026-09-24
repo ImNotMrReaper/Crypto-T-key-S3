@@ -1,90 +1,131 @@
-# Crypto T-Key S3 Security Audit
+# Crypto T-Key S3 — Security Audit
 
-**Review type:** repository-level defensive audit  
-**Review basis:** source inspection of the current `main` tree  
-**Status:** remediation required before production use  
-**Date:** 2026-09-24
+| | |
+| :--- | :--- |
+| **Scope** | Firmware (`crypto-tkey-s3.ino`, `src/`), host integration (`host/`), tooling (`tools/`) |
+| **Method** | Source review, plus hardware testing with the suites in `tools/` (CTAP2, hmac-secret, wallet, UI soak) |
+| **Revision** | 2026-09-24, revised and verified against the code (supersedes the first draft of the same date) |
+| **Verdict** | Fine for experimenting and as a *second* authenticator. **Not** yet a safe sole key or cold wallet. |
 
-## Executive summary
+This is a source-level review, not a penetration test, fault-injection assessment or certification.
+Re-check the findings after any firmware change.
 
-The repository contains useful security boundaries—physical user presence, production-only restrictions around serial signing, constant-time PIN-hash comparison, AES-GCM authentication for MicroSD containers, and a dry-run default for eFuse tooling. Those controls reduce risk, but they do not make the device a certified hardware wallet or security key.
+## Threat model
 
-The highest-priority concerns are password/key derivation strength, unauthenticated setup-portal exposure, plaintext Wi-Fi credential storage, incomplete secure deletion semantics, and insufficient validation around irreversible eFuse operations.
+| Adversary | In scope | Notes |
+| :--- | :--- | :--- |
+| Malicious website / relying party | Yes | CTAP2 origin binding and the touch requirement |
+| Malware on the host computer | Yes | It can ask for signatures but can't approve them; the screen shows what is being approved |
+| Someone nearby over Wi-Fi | Yes | Setup portal SoftAP |
+| Someone holding the dongle | Yes | Main open risk today (C1) |
+| Lab attacker (decapping, glitching) | No | The ESP32-S3 isn't a secure element |
 
 ## Findings
 
-### High — Setup portal authentication is not hardened
+| ID | Severity | Finding | Status |
+| :--- | :--- | :--- | :--- |
+| C1 | **Critical** | Secrets readable from flash | Open: needs the hardening roadmap below |
+| C2 | **Critical** | eFuse tool would brick the device | **Fixed** (burn path disabled) |
+| H1 | High | Setup portal is an open AP with weak authentication | Planned: portal rebuild |
+| H2 | High | PIN hashes are only brute-force resistant on-device | Open: tied to C1 |
+| M1 | Medium | Attestation private key is published in the source | Planned |
+| M2 | Medium | Vault container header isn't fully authenticated | Open |
+| M3 | Medium | MicroSD "wipe" is only a logical delete | Documented |
+| M4 | Medium | Builds aren't reproducible or pinned | Open |
+| L1 | Low | No license and no tagged releases | Open |
 
-The setup password is represented as a plain SHA-256 digest and the SoftAP is an unauthenticated local HTTP service during setup. There is no visible rate limit, lockout, session expiry, CSRF protection, or transport authentication. A nearby attacker who can reach the portal can brute-force weak passwords or abuse configuration endpoints.
+### C1 — Critical: secrets are readable from flash
 
-**Recommended remediation:** use a memory-hard password KDF where feasible, enforce a long random setup secret, add login throttling and lockout, expire authenticated sessions, validate request origin/state, and clearly require physical presence before enabling configuration changes.
+Flash encryption and Secure Boot are not enabled. The ROM download mode can be reached with the BOOT button or the 1200-baud reset that `tools/flash_app.sh` uses, and in that mode `esptool read_flash` dumps the whole flash. That dump contains:
 
-### High — Wi-Fi credentials are stored directly in NVS
+- `fido_vault/master_sec`: the root secret for every non-resident credential and for hmac-secret, in plaintext.
+- `fido_rk/*`: resident credential private keys.
+- `wallet_seed/dev_key` **and** `wallet_seed/seed`: the AES-256-GCM key sits next to the ciphertext it protects, so encrypting the seed at rest doesn't protect it against a dump.
+- `wifi_cfg/*`: Wi-Fi SSIDs and passwords in plaintext.
 
-`WifiManager` stores SSIDs and passwords in the `wifi_cfg` NVS namespace. Device flash access, firmware compromise, or an unsafe debug configuration can expose them.
+**Impact:** anyone who holds the dongle for about a minute can clone every passkey and recover the wallet seed.
 
-**Recommended remediation:** encrypt credentials under a device-bound key, minimize retention, provide an explicit erase operation, and document that Wi-Fi provisioning is not appropriate for hostile environments.
+**Remediation** (in order; the first step needs no irreversible eFuse beyond one key block):
+1. **Tie wallet encryption to the chip and the PIN.**
+   1. Burn a random 256-bit key into an eFuse key block with purpose `HMAC_UP`. That block can't be read back.
+   2. Derive the seed key as `HKDF(HMAC_efuse(PBKDF2(PIN, salt)), dev_key)`.
 
-### High — Vault KDF work factor is outdated
+   A flash dump is then useless without the physical chip, and PIN guessing has to happen on-device, where the lockout applies. Apply the same wrapping to `master_sec`, and to resident keys, without the PIN.
+2. **Flash encryption (release mode) and Secure Boot v2**, using an ESP-IDF–built bootloader. The bootloader generates the key on-chip and encrypts the firmware in place. Arduino's prebuilt bootloader can't do this; see C2.
+3. **Disable ROM download mode** (`DIS_DOWNLOAD_MODE`, or `ENABLE_SECURITY_DOWNLOAD`) only after OTA updates over USB work, or the device can never be updated again.
 
-The MicroSD vault derives its AES key with PBKDF2-HMAC-SHA256 using 10,000 iterations. This is a weak offline-guessing cost for a short numeric PIN, even though the key is device-bound.
+### C2 — Critical (fixed): the eFuse tool would brick the device
 
-**Recommended remediation:** migrate to a calibrated work factor or an embedded-friendly memory-hard KDF, version the container format, and provide an explicit migration path so existing backups remain recoverable. Do not silently change the value without a format/version migration.
+`tools/burn_production_efuses.py --burn-now` burned `SPI_BOOT_CRYPT_CNT=1` directly, without:
+- generating or writing a flash-encryption key, or
+- encrypting the firmware.
 
-### Medium — Encrypted-container authentication coverage is narrow
+On the next boot the ROM would "decrypt" plaintext flash and the device would never boot again. It also ignored `espefuse` return codes. Its simulation claimed Secure Boot and download-mode lockout, which the burn path never did.
 
-The vault authenticates the magic value as AAD, but the header fields such as version, flags, and payload length are not all bound as authenticated metadata. Malformed or manipulated metadata therefore deserves additional validation before allocation and decryption.
+**Fix:** the burn path is removed. The tool now only reads eFuses (`--summary`) and prints the correct provisioning sequence.
 
-**Recommended remediation:** authenticate a canonical serialized header, validate version, flags, file size, and maximum payload length, and reject trailing or truncated data.
+### H1 — High: setup portal
 
-### Medium — Secure deletion is not guaranteed on MicroSD
+- The SoftAP `T-Key-Setup` has **no WPA2 password**, so anyone in range can join.
+- The setup password is stored as an **unsalted SHA-256**, with no attempt limit or lockout, and the session never expires.
+- The new PIN is written back into the page (`value='…'`) after a form error.
 
-The wipe routine writes a fixed amount of zero data before deleting files. Flash translation layers and wear-leveling mean overwrite-and-delete cannot guarantee physical erasure from removable media.
+**Remediation (portal rebuild, next firmware):**
+- A random WPA2 passphrase shown only on the device screen.
+- A salted PBKDF2 setup password, migrated from the old hash.
+- A per-session random cookie with an expiry, and a lockout after 5 failed attempts.
+- No PIN or password echoed back into the page.
+- A button press on the device required to apply changes.
 
-**Recommended remediation:** describe this as logical deletion only, destroy the encryption key first, use a bounded file-size overwrite where useful, and require destruction or controlled reformatting of the card for high-assurance disposal.
+### H2 — High: PIN hashes
 
-### Medium — eFuse tool needs stronger production gates
+The PIN (`pin_vault`) and the SD vault key both use PBKDF2-SHA256 with 10,000 iterations. On a 4–8 digit PIN, the entire 8-digit keyspace falls to a GPU in minutes, so the only real defence is keeping the hash off an attacker's machine. The 10-attempt lockout protects against on-device guessing only. Fixed by C1 step 1, after which the PBKDF2 cost matters much less.
 
-The tool correctly warns that eFuse operations are irreversible and defaults to simulation, but the burn path does not appear to verify every subprocess return code or validate the full Secure Boot/Flash Encryption provisioning sequence. The simulation text also describes protections beyond what the burn path actually performs.
+### M1 — Medium: attestation key is published
 
-**Recommended remediation:** make the dry-run mode explicit, require a signed build manifest and device identity confirmation, stop immediately on any failed command, print a post-burn summary, and keep the simulated plan exactly aligned with the commands executed.
+`FIDO_ATTESTATION_PRIVKEY` in `src/ctap2.cpp` is in this public repository, so anyone can produce attestations that claim this model's AAGUID. User credentials aren't affected: each credential has its own key. Relying parties shouldn't treat this device's attestation as proof of genuine hardware. **Remediation:** switch to self attestation (packed with no `x5c`, signed by the credential key), or generate a per-device attestation key on first boot.
 
-### Medium — Release reproducibility is not established
+### M2 — Medium: vault container header
 
-The repository does not currently pin all Arduino core/library versions, publish a lockfile, or provide a CI build that records the toolchain and artifact digest.
+`sd_vault` uses only the magic value as GCM AAD; the version, flags and length aren't authenticated. **Remediation:** authenticate the whole serialized header; check version, flags and length against the file size before allocating memory; reject truncated files and trailing data.
 
-**Recommended remediation:** pin the board package and libraries, add a reproducible compile workflow, archive build metadata, and publish checksums for release artifacts.
+### M3 — Medium: MicroSD deletion
 
-### Low — Repository licensing and release status are unclear
+Overwrite-then-delete can't guarantee erasure on flash media, because of wear levelling. Treat the vault wipe as a logical delete. Destroying the key (for example, the device being wiped) is what actually makes old containers unreadable.
 
-No license is declared and there are no security release tags. Users may incorrectly assume production support or redistribution rights.
+### M4 — Medium: reproducibility
 
-**Recommended remediation:** add an explicit license decision, versioned releases, a changelog, and a security-status statement to every release.
+Neither the ESP32 core nor the libraries are pinned, and there's no CI build or published checksum. **Remediation:** pin versions (`sketch.yaml` profile), add a CI compile, and publish the SHA-256 of each release binary.
 
-## Existing positive controls
+### L1 — Low: license and releases
 
-- Physical-button user presence is required for production signing paths.
-- PIN comparisons use a constant-time comparison helper.
-- PIN hashes and legacy plaintext PINs are migrated away from the old storage field.
-- AES-256-GCM includes an authentication tag for vault payloads.
-- Sensitive temporary buffers are explicitly zeroized in several paths.
-- eFuse tooling has a prominent irreversible-operation warning and dry-run behavior.
-- Wi-Fi is normally disabled while a USB host is present.
+There's no license, tagged release or changelog.
 
-These controls still require hardware tests, code review, and adversarial testing.
+## Controls verified in place
 
-## Upgrade gates
+- **User presence:** every CTAP2/U2F operation needs a physical press, with the relying party shown. The prompt is cancelled when the host stops polling.
+- **Randomness:** the ESP32-S3 RNG is a PRNG unless RF is on, so every draw enables the bootloader entropy source (`bootloader_random_enable`) first.
+- **Serial console:** production builds compile out serial touch, seed export, unlock and signing (`TKEY_TEST_SERIAL_TOUCH` is off).
+- **PIN handling:**
+  - salted PBKDF2 with a constant-time compare;
+  - legacy plaintext PINs are migrated and erased;
+  - duress PIN and a 10-attempt lockout;
+  - FIDO client-PIN retries are tracked separately.
+- **Wallet:**
+  - the seed is decrypted into RAM only while unlocked and wiped on lock;
+  - key material is zeroized with `mbedtls_platform_zeroize`;
+  - receive addresses are cross-checked against `bip_utils` reference vectors.
+- **Radio:** Wi-Fi is off whenever a USB host is attached and duty-cycled on wall power. HTTPS uses NTP time and the Mozilla CA bundle.
+- **Host:** udev rules give HID access to the logged-in user (`uaccess`) and `plugdev`; the portfolio daemon runs as the user, not root.
 
-Before a production claim, require:
+## Release gates
 
-- clean build from a pinned toolchain;
-- unit and negative tests for CBOR, CTAP2, PSBT, EVM parsing, PIN lockout, and vault corruption;
-- fuzzing of all host- and MicroSD-controlled parsers;
-- verification that secrets never enter serial logs or host-side telemetry;
-- physical recovery testing before any eFuse burn;
-- independent review of signing display logic and address derivation;
-- documented backup, restore, and lost-device procedures.
+Before calling any build production-ready:
 
-## Scope limitation
-
-This document is a source-level audit, not a penetration test, cryptographic proof, hardware fault-injection assessment, or certification. Findings should be revalidated after firmware changes.
+- [ ] C1 steps 1–2 done and verified by dumping the flash of a test unit
+- [ ] H1 portal rebuilt
+- [ ] M1 attestation replaced
+- [ ] Pinned toolchain, reproducible build, published checksum
+- [ ] Fuzzing of the CBOR/CTAP2, PSBT, EVM and vault parsers
+- [ ] Negative tests: PIN lockout, corrupted vault, malformed CTAP frames
+- [ ] Recovery tested on a spare unit before any eFuse is burned
