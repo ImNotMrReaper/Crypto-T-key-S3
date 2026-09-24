@@ -45,6 +45,15 @@ bool CryptoP256::loadOrGenerateMasterSecret() {
     return true;
 }
 
+bool CryptoP256::rotateMasterSecret() {
+    getRandomBytes(_masterSecret, sizeof(_masterSecret));
+    Preferences prefs;
+    prefs.begin("fido_vault", false);
+    bool ok = prefs.putBytes("master_sec", _masterSecret, sizeof(_masterSecret)) == sizeof(_masterSecret);
+    prefs.end();
+    return ok;
+}
+
 bool CryptoP256::getRandomBytes(uint8_t* out, size_t len) {
     if (!out || len == 0) return false;
     esp_fill_random(out, len);

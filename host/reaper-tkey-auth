@@ -1,0 +1,93 @@
+#!/usr/bin/python3
+"""
+reaper-tkey-auth <user>: tap-to-authenticate with a Crypto TKey S3.
+
+Third racer in /lib/security/reaper_concurrent_biometric_pam.py next to Howdy and the
+fingerprint engine. Uses the pam_u2f mapping file (~user/.config/Yubico/u2f_keys,
+written by `pamu2fcfg`) and libfido2's fido2-assert for both the assertion and its
+signature check, so it needs nothing beyond the standard library and fido2-tools.
+
+Exit 0 only after a signature from a registered credential verifies with user presence.
+"""
+import base64
+import os
+import pwd
+import socket
+import subprocess
+import sys
+import tempfile
+
+TKEY_VENDOR = "vendor=0x303a"
+P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d03010703420004")
+TOUCH_TIMEOUT = 25
+
+
+def tkey_devices():
+    out = subprocess.run(["fido2-token", "-L"], capture_output=True, text=True).stdout
+    return [line.split(":")[0] for line in out.splitlines() if TKEY_VENDOR in line]
+
+
+def credentials(user):
+    path = os.path.join(pwd.getpwnam(user).pw_dir, ".config", "Yubico", "u2f_keys")
+    creds = []
+    try:
+        with open(path) as f:
+            for line in f:
+                name, _, rest = line.strip().partition(":")
+                if name != user:
+                    continue
+                for entry in rest.split(":"):
+                    fields = entry.split(",")
+                    if len(fields) >= 3 and fields[2] == "es256":
+                        creds.append((fields[0], base64.b64decode(fields[1])))
+    except OSError:
+        pass
+    return creds
+
+
+def assert_on(dev, rp, key_handle, presence):
+    cdh = base64.b64encode(os.urandom(32)).decode()
+    r = subprocess.run(["fido2-assert", "-G", "-t", f"up={'true' if presence else 'false'}", dev],
+                       input=f"{cdh}\n{rp}\n{key_handle}\n", capture_output=True, text=True,
+                       timeout=TOUCH_TIMEOUT + 5)
+    return r.stdout if r.returncode == 0 else None
+
+
+def verify(assertion, pubkey_raw):
+    der = P256_SPKI_PREFIX + (pubkey_raw[1:] if len(pubkey_raw) == 65 else pubkey_raw)
+    pem = "-----BEGIN PUBLIC KEY-----\n" + base64.encodebytes(der).decode() + "-----END PUBLIC KEY-----\n"
+    with tempfile.NamedTemporaryFile("w", suffix=".pem") as f:
+        f.write(pem)
+        f.flush()
+        r = subprocess.run(["fido2-assert", "-V", "-p", f.name, "es256"], input=assertion,
+                           capture_output=True, text=True)
+    return r.returncode == 0
+
+
+def main():
+    if len(sys.argv) != 2:
+        sys.exit(2)
+    user = sys.argv[1]
+    rp = "pam://" + socket.gethostname()
+    creds = credentials(user)
+    devs = tkey_devices()
+    if not creds or not devs:
+        sys.exit(2)  # nothing registered / no key plugged in: stay out of the race
+    for dev in devs:
+        # Silent probe first so only the matching credential asks for a tap.
+        for kh, pub in creds:
+            try:
+                if not assert_on(dev, rp, kh, presence=False):
+                    continue
+                print("Tap your Crypto TKey S3...", flush=True)
+                assertion = assert_on(dev, rp, kh, presence=True)
+            except subprocess.TimeoutExpired:
+                sys.exit(1)
+            if assertion and verify(assertion, pub):
+                print("✅ Crypto TKey S3 verified", flush=True)
+                sys.exit(0)
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

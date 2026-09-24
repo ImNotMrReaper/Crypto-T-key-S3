@@ -16,3 +16,6 @@ build/
 .theia/
 __pycache__/
 *.pyc
+
+# Host-specific copy of the system PAM module (install locally, never publish)
+host/reaper_concurrent_biometric_pam.py

@@ -9,7 +9,7 @@
 void DuressWipe::zeroizeMemoryAndNVS() {
     // 1. Wipe Preferences / NVS Keystores
     Preferences prefs;
-    const char* namespaces[] = {"vault_sec", "fido_vault", "wifi_cfg", "sec_key", "fido2_keys", "wallet_seed", "totp_cfg", "device_cfg", nullptr};
+    const char* namespaces[] = {"vault_sec", "fido_vault", "wifi_cfg", "sec_key", "fido2_keys", "fido_rk", "wallet_seed", "totp_cfg", "device_cfg", nullptr};
     for (int i = 0; namespaces[i] != nullptr; i++) {
         if (prefs.begin(namespaces[i], false)) {
             prefs.clear();

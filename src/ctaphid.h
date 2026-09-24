@@ -28,8 +28,6 @@
 #define CTAP1_ERR_INVALID_CHANNEL     0x0B
 #define CTAP1_ERR_OTHER               0x7F
 
-#define CTAP2_ERR_USER_ACTION_TIMEOUT 0x27
-#define CTAP2_ERR_UP_REQUIRED         0x2E
 
 // CTAPHID Keepalive Status Codes
 #define CTAPHID_STATUS_PROCESSING     0x01
@@ -39,7 +37,7 @@
 #define CTAPHID_PACKET_SIZE     64
 #define CTAPHID_INIT_HEADER_LEN 7
 #define CTAPHID_CONT_HEADER_LEN 5
-#define CTAPHID_MAX_MSG_LEN     1024
+#define CTAPHID_MAX_MSG_LEN     2048
 
 // FIDO Usage Page HID Report Descriptor
 extern const uint8_t fido_hid_report_descriptor[];
@@ -65,6 +63,10 @@ public:
 
     void handleIncomingPacket(const uint8_t* buffer, uint16_t len);
 
+    // Set when the host sends CTAPHID_CANCEL (or re-INITs) the channel whose
+    // CBOR/MSG transaction is in flight; polled by the user-presence prompt.
+    bool isCancelRequested() const { return _cancelRequested; }
+
     // Callbacks to CTAP2 / CTAP1 core & telemetry
     typedef void (*CborHandler)(uint32_t cid, const uint8_t* req, uint16_t reqLen);
     typedef void (*MsgHandler)(uint32_t cid, const uint8_t* req, uint16_t reqLen);
@@ -89,6 +91,8 @@ private:
     MsgHandler _msgHandler;
     WinkHandler _winkHandler;
     bool _diagnosticMode;
+    uint32_t _busyCid;            // channel with a CBOR/MSG transaction in flight (0 = idle)
+    volatile bool _cancelRequested;
 };
 
 extern CtapHid ctapHid;

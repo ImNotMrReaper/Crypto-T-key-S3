@@ -1,6 +1,7 @@
 #include "ctaphid.h"
 #include "USB.h"
 #include "USBHID.h"
+#include <esp_random.h>
 
 CtapHid ctapHid;
 
@@ -90,7 +91,8 @@ public:
 static FidoHidDevice fidoDev;
 
 CtapHid::CtapHid() 
-    : _nextCid(1), _isReceiving(false), _lastPacketTime(0), _cborHandler(nullptr), _msgHandler(nullptr), _winkHandler(nullptr), _diagnosticMode(false) {
+    : _nextCid(1), _isReceiving(false), _lastPacketTime(0), _cborHandler(nullptr), _msgHandler(nullptr), _winkHandler(nullptr), _diagnosticMode(false),
+      _busyCid(0), _cancelRequested(false) {
     memset(&_rxMsg, 0, sizeof(_rxMsg));
 }
 
@@ -109,10 +111,11 @@ void CtapHid::begin(bool diagnosticMode) {
 }
 
 uint32_t CtapHid::allocateCid() {
-    uint32_t cid = _nextCid++;
-    if (_nextCid == 0 || _nextCid == CTAPHID_BROADCAST_CID) {
-        _nextCid = 1;
-    }
+    // Random CIDs: a client left over from before a reboot can't collide with a new one.
+    uint32_t cid;
+    do {
+        cid = esp_random();
+    } while (cid == 0 || cid == CTAPHID_BROADCAST_CID);
     return cid;
 }
 
@@ -145,6 +148,27 @@ void CtapHid::handleIncomingPacket(const uint8_t* buffer, uint16_t len) {
         uint8_t cmd = buffer[4] & 0x7F;
         uint16_t totalLen = ((uint16_t)buffer[5] << 8) | buffer[6];
         Serial.printf("[CTAPHID IN] cid=0x%08X rawCmd=0x%02X len=%u\n", cid, buffer[4], totalLen);
+
+        // CANCEL aborts the in-flight transaction on its channel; it never gets a response.
+        if (cmd == CTAPHID_CMD_CANCEL) {
+            if (_busyCid != 0 && cid == _busyCid) _cancelRequested = true;
+            return;
+        }
+        // While a transaction waits for the user, only INIT is served on other channels.
+        // Answer it straight from the packet: _rxMsg still backs the in-flight request.
+        if (_busyCid != 0 && cmd == CTAPHID_CMD_INIT) {
+            if (totalLen == 8) handleInit(cid, buffer + 7, 8);
+            else sendError(cid, CTAP1_ERR_INVALID_LENGTH);
+            return;
+        }
+        if (_busyCid != 0) {
+            sendError(cid, CTAP1_ERR_CHANNEL_BUSY);
+            return;
+        }
+        if (_isReceiving && cid != _rxMsg.cid && cmd != CTAPHID_CMD_INIT) {
+            sendError(cid, CTAP1_ERR_CHANNEL_BUSY);
+            return;
+        }
 
         if (totalLen > CTAPHID_MAX_MSG_LEN) {
             sendError(cid, CTAP1_ERR_INVALID_LENGTH);
@@ -205,7 +229,10 @@ void CtapHid::dispatchMessage() {
             break;
         case CTAPHID_CMD_MSG:
             if (_msgHandler) {
+                _busyCid = _rxMsg.cid;
+                _cancelRequested = false;
                 _msgHandler(_rxMsg.cid, _rxMsg.data, _rxMsg.length);
+                _busyCid = 0;
             } else {
                 sendError(_rxMsg.cid, CTAP1_ERR_INVALID_COMMAND);
             }
@@ -215,13 +242,13 @@ void CtapHid::dispatchMessage() {
             break;
         case CTAPHID_CMD_CBOR:
             if (_cborHandler) {
+                _busyCid = _rxMsg.cid;
+                _cancelRequested = false;
                 _cborHandler(_rxMsg.cid, _rxMsg.data, _rxMsg.length);
+                _busyCid = 0;
             } else {
                 sendError(_rxMsg.cid, CTAP1_ERR_INVALID_COMMAND);
             }
-            break;
-        case CTAPHID_CMD_CANCEL:
-            // Cancel pending operation
             break;
         default:
             sendError(_rxMsg.cid, CTAP1_ERR_INVALID_COMMAND);
@@ -236,6 +263,7 @@ void CtapHid::handleInit(uint32_t cid, const uint8_t* payload, uint16_t len) {
     }
 
     const uint8_t* nonce = payload;
+    if (_busyCid != 0 && cid == _busyCid) _cancelRequested = true; // re-INIT aborts the transaction
     uint32_t allocatedCid = (cid == CTAPHID_BROADCAST_CID) ? allocateCid() : cid;
 
     // INIT Response packet:

@@ -130,6 +130,13 @@ void setup() {
     // 1. Initialize Thermal & Power Management (80MHz, RF disabled)
     PowerManager::init();
 
+    // Enumerate as a FIDO2 key first so browsers see it immediately (the rest of boot
+    // takes seconds). Requests queue in CTAPHID until loop() starts servicing them, and
+    // authenticatorReset's 10 s power-up window stays usable.
+    ctapHid.begin();
+    ctap2Engine.begin();
+    ctap2Engine.setUserPresencePrompt(handleUserPresencePrompt);
+
     Serial.begin(115200);
     delay(600);
 
@@ -163,15 +170,6 @@ void setup() {
     wallet = new CryptoWallet();
     wallet->begin();
 
-    ctapHid.begin();
-    ctap2Engine.begin();
-    ctap2Engine.setUserPresencePrompt(handleUserPresencePrompt);
-    ctapHid.setCborHandler([](uint32_t cid, const uint8_t* data, uint16_t len) {
-        ctap2Engine.handleCborRequest(cid, data, len);
-    });
-    ctapHid.setMsgHandler([](uint32_t cid, const uint8_t* data, uint16_t len) {
-        ctap2Engine.handleCtap1Msg(cid, data, len);
-    });
     ctapHid.setWinkHandler([](uint32_t cid) {
         Serial.printf("[FIDO2] 😉 WINK identification triggered on CID 0x%08X!\n", cid);
         rgb.flashRainbow(1500);
@@ -200,6 +198,7 @@ void setup() {
         rgb.setMode(LED_MODE_BREATHE_CYAN);
     }
 
+    ctap2Engine.markReady();
     Serial.println("[BOOT] ✅ Crypto TKey S3 Ready. 3-Screen Architecture Active.");
     Serial.println("========================================================\n");
 }
@@ -787,7 +786,12 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
         float remaining = 1.0f - ((float)(millis() - start) / 30000.0f);
         ui.renderPasskeyHub(true, reqDomain, remaining);
 
-        if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS || s_simulatedTouch) {
+        if (ctapHid.isCancelRequested()) {  // browser cancelled / timed out the request
+            confirmed = false;
+            done = true;
+            ui.renderErrorBanner("Request Cancelled");
+            delay(600);
+        } else if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS || s_simulatedTouch) {
             confirmed = true;
             done = true;
             s_simulatedTouch = false;
@@ -892,8 +896,15 @@ void handleSerialCommands() {
         Serial.println("  decode_evm <hex>         - Clear-sign & inspect EVM transaction (PEPE/EIP-1559)");
         Serial.println("  sign_evm <hex>           - Clear-sign & display prompt on device screen");
     } else if (cmd.equalsIgnoreCase("touch") || cmd.equalsIgnoreCase("press")) {
+#ifdef TKEY_TEST_SERIAL_TOUCH
+        // Test builds only: lets the automated suite approve prompts over CDC.
         s_simulatedTouch = true;
         Serial.println("[BTN] 👆 Simulated User Presence button touch received.");
+#else
+        // Production: user presence must be the physical button. Any local process can
+        // open the CDC port, so a serial "touch" would let malware approve logins.
+        Serial.println("[BTN] Serial touch disabled in production firmware (press the button).");
+#endif
     } else if (cmd.equalsIgnoreCase("status")) {
         Serial.printf("Uptime: %lus | CPU: %dMHz | Vault: %s | Master PIN Len: %d | Active Coins: %d | Rotation: %d\n",
             millis() / 1000, getCpuFrequencyMhz(), wallet->isUnlocked() ? "UNLOCKED" : "LOCKED",

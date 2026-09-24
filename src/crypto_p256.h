@@ -41,6 +41,9 @@ public:
     static bool aes256CbcDecrypt(const uint8_t* key32, const uint8_t* iv16, const uint8_t* in, size_t len, uint8_t* out);
     static bool aes256CbcEncrypt(const uint8_t* key32, const uint8_t* iv16, const uint8_t* in, size_t len, uint8_t* out);
 
+    // authenticatorReset: replace the master secret, invalidating every credential ever issued
+    bool rotateMasterSecret();
+
     // Monotonic Replay Protection Counter
     uint32_t getSignatureCounter();
     uint32_t incrementSignatureCounter();
