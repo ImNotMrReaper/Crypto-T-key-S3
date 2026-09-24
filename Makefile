@@ -1,10 +1,11 @@
-# Antigravity Arduino Forge — T-Dongle S3 Security Key Makefile
+# Crypto T-Key S3 — Arduino Forge
+# LilyGo T-Dongle S3 FIDO2 security key and offline crypto vault
 
 PORT ?= $(shell ./arduino_forge.py --detect 2>/dev/null || echo "/dev/ttyACM0")
 
-.PHONY: all flash compile monitor pins clean agy
+.PHONY: all flash compile monitor pins detect clean agy
 
-all: flash
+all: compile
 
 compile:
 	./arduino_forge.py --compile
@@ -20,6 +21,9 @@ pins:
 
 detect:
 	./arduino_forge.py --detect
+
+clean:
+	rm -rf build
 
 agy:
 	cd "$$(pwd)" && agy -c
