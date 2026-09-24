@@ -101,7 +101,19 @@ void PsbtSigner::doubleSha256(const uint8_t* data, size_t len, uint8_t out[32]) 
 }
 
 // ─── 4. Variable Length Integer (CompactSize) ────────────────────────────────
+// Lengths and counts in a PSBT come from the file itself. Anything larger than the buffer is
+// saturated to maxLen + 1, so every "offset + len > maxLen" check fails instead of wrapping
+// around in 32-bit size_t (a 64-bit varint cast to size_t could otherwise pass the check).
+static uint64_t clampToBuf(uint64_t v, size_t maxLen) {
+    return v > (uint64_t)maxLen ? (uint64_t)maxLen + 1 : v;
+}
+
 uint64_t PsbtSigner::readVarInt(const uint8_t* buf, size_t maxLen, size_t& offset) {
+    uint64_t v = readVarIntRaw(buf, maxLen, offset);
+    return clampToBuf(v, maxLen);
+}
+
+uint64_t PsbtSigner::readVarIntRaw(const uint8_t* buf, size_t maxLen, size_t& offset) {
     if (offset >= maxLen) return 0;
     uint8_t first = buf[offset++];
     if (first < 0xFD) {
@@ -284,7 +296,7 @@ bool PsbtSigner::parsePsbtFile(const char* filePath, PsbtTxDetails& outDetails, 
     if (!f) return false;
 
     size_t fSize = f.size();
-    if (fSize < 20 || fSize > 32768) {
+    if (fSize < 20 || fSize > PSBT_MAX_FILE_BYTES) {
         f.close();
         return false;
     }
@@ -438,6 +450,10 @@ bool PsbtSigner::signPsbtFile(const char* filePath, const CryptoWallet& wallet, 
     if (!f) return false;
 
     size_t fSize = f.size();
+    if (fSize < 20 || fSize > PSBT_MAX_FILE_BYTES) {   // same cap as parsing: never malloc an arbitrary SD file
+        f.close();
+        return false;
+    }
     uint8_t* rawBuf = (uint8_t*)malloc(fSize + 1);
     if (!rawBuf) {
         f.close();

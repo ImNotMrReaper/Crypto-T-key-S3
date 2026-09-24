@@ -7,6 +7,8 @@
 
 #pragma once
 
+#define PSBT_MAX_FILE_BYTES 32768   // largest PSBT file read from MicroSD
+
 #include <Arduino.h>
 #include <FS.h>
 #include <SD_MMC.h>
@@ -52,6 +54,7 @@ public:
 private:
     static bool _mounted;
     static uint64_t readVarInt(const uint8_t* buf, size_t maxLen, size_t& offset);
+    static uint64_t readVarIntRaw(const uint8_t* buf, size_t maxLen, size_t& offset);
     static void writeVarInt(uint64_t val, uint8_t* out, size_t& offset);
     static void doubleSha256(const uint8_t* data, size_t len, uint8_t out[32]);
     static bool decodeBase64(const char* in, size_t inLen, uint8_t* out, size_t& outLen, size_t maxOut);

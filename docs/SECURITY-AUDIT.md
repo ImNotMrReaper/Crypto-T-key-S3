@@ -35,6 +35,7 @@ Re-check the findings after any firmware change.
 | M3 | Medium | MicroSD "wipe" is only a logical delete | Documented |
 | M4 | Medium | Builds aren't reproducible or pinned | Open |
 | M5 | Medium | NVS exhaustion: the partition filled up, so new records silently failed to save | **Fixed** |
+| M6 | Medium | PSBT length checks could wrap around; the signing path had no file-size cap | **Fixed** |
 | L1 | Low | No license and no tagged releases | Open |
 
 ### C1 — Critical: secrets are readable from flash
@@ -106,6 +107,12 @@ The 20 KB NVS partition had filled up. The causes were:
 - the Wi-Fi driver's own config copies (`nvs.net80211`).
 
 Writes then failed silently. The first symptom was the attestation certificate failing to save. The selection is now stored as one string and balances only for coins you hold; the legacy namespace is cleared; and `WiFi.persistent(false)` stops the driver copies. Measured usage went from 488 to 131 entries.
+
+### M6 — Medium (fixed): PSBT parser bounds
+
+The PSBT lengths come from the MicroSD file itself, and they're read as varints of up to 64 bits. After a cast to the ESP32's 32-bit `size_t`, a check like `offset + len > psbtLen` could wrap around and pass, letting a crafted file read past the buffer. The signing path also loaded files of any size into memory. Now:
+- `readVarInt` saturates values larger than the buffer to `len + 1`, so the check always fails safely.
+- Both read paths share a 32 KB `PSBT_MAX_FILE_BYTES` cap.
 
 ### M2 — Medium: vault container header
 
