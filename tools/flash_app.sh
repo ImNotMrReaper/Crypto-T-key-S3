@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Flash only the application partition (0x10000) of the Crypto TKey S3.
 #
-# Why not `arduino-cli upload`: it writes the merged image from 0x0, and the 0xFF gap
-# fill wipes the NVS partition at 0x9000 (setup, wallet config, FIDO master secret,
-# passkeys). This writes the app only, so every enrolled account keeps working.
+# Why not `arduino-cli upload`: its automatic reset into the ROM bootloader fails through
+# the composite TinyUSB CDC+HID stack ("No serial data received"). This does the 1200-baud
+# touch, waits for the ROM's USB-JTAG port, and writes the app partition only; the NVS
+# partition (setup, wallet config, FIDO master secret, passkeys) is never touched.
 #
 #   tools/flash_app.sh [build-dir] [serial-port]
 #   (build-dir must contain crypto-tkey-s3.ino.bin from `arduino-cli compile --output-dir`)

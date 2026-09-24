@@ -1,0 +1,5 @@
+# Crypto TKey S3 (LilyGO T-Dongle S3, Espressif 303a:1001) FIDO2 HID interface.
+# uaccess: Chrome & libfido2 tools for the desktop user. snap_firefox_firefox: the Firefox
+# snap's device cgroup only admits known key VID/PIDs; 303a isn't on its list. Must sort
+# before 70-snap.firefox.rules so its snap-device-helper RUN rule sees the tag.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="snap_firefox_firefox"
