@@ -40,13 +40,20 @@ struct ClearSignTx {
 class CryptoWallet {
 public:
     void begin();
-    bool unlock(const char* pin);
+    // Decrypts the stored seed and derives the signing keys. The caller verifies the PIN
+    // first (PinVault::check). Returns false when no wallet seed has been created yet.
+    bool unlock();
     void lock();
     bool isUnlocked() const { return _isUnlocked; }
+    bool hasSeed() const { return _hasSeed; }
+
+    // Validates a 12/24-word BIP-39 phrase (word list + checksum).
+    static bool isValidMnemonic(const char* phrase);
 
     // Seed & Account APIs
     const char* getMnemonicPhrase() const;
     void generateNewMnemonic();
+    // Installs and persists a new seed (AES-256-GCM in NVS) and caches its public addresses.
     bool setMnemonic(const char* phrase);
     const WalletAccount* getAccount(CryptoCoin coin) const;
     const char* getAddress(CryptoCoin coin) const;
@@ -66,12 +73,16 @@ public:
 
 private:
     void deriveAllAccounts();
+    void publishAddresses();
+    bool storeSeed();
+    bool loadSeed();
     void deriveBtcAddress(WalletAccount& acc);
     void deriveEthAddress(WalletAccount& acc);
     void deriveSolAddress(WalletAccount& acc);
     void deriveDogeAddress(WalletAccount& acc);
 
     bool          _isUnlocked = false;
+    bool          _hasSeed = false;
     char          _mnemonic[160];
     uint8_t       _masterSeed[64];
     WalletAccount _accounts[COIN_COUNT];

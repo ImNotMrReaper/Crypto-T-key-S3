@@ -90,6 +90,8 @@ def main():
     ap.add_argument("--port", default="/dev/ttyACM0")
     ap.add_argument("--no-serial", action="store_true", help="always wait for the physical button")
     ap.add_argument("--reset", action="store_true", help="finish with authenticatorReset")
+    ap.add_argument("--no-pin", action="store_true",
+                    help="skip the clientPIN and passkey sections (leaves an enrolled key untouched)")
     args = ap.parse_args()
 
     ser = None if args.no_serial else open_serial(args.port)
@@ -172,6 +174,24 @@ def main():
     presence.deny = False
     time.sleep(1.2)
 
+    if args.no_pin:
+        print("\n[4-5] skipped (--no-pin)")
+    else:
+        pin_and_passkeys(ctap2, client, server, presence, pin_was_set)
+
+    legacy_u2f(dev, presence)
+
+    if args.reset:
+        do_reset(args, ser, presence)
+
+    ok = sum(r for r, _ in results)
+    print(f"\n{ok}/{len(results)} checks passed")
+    sys.exit(0 if ok == len(results) else 1)
+
+
+def pin_and_passkeys(ctap2, client, server, presence, pin_was_set):
+    rp = server.rp
+    user = PublicKeyCredentialUserEntity(id=b"hw-user-1", name="imnotmrreaper", display_name="Mr Reaper")
     print("\n[4] FIDO PIN (clientPIN protocol 1)")
     cp = ClientPin(ctap2)
     if not pin_was_set:
@@ -213,6 +233,9 @@ def main():
     names = {a.user.get("name") for a in sel.get_assertions()}
     check(names == {"alice@example", "bob@example"}, "account names returned for the account picker", str(names))
 
+
+
+def legacy_u2f(dev, presence):
     print("\n[6] Legacy U2F (CTAP1)")
     ctap1 = Ctap1(dev)
     app = __import__("hashlib").sha256(b"https://u2f.example").digest()
@@ -236,7 +259,10 @@ def main():
     sig.verify(app, chal, reg1.public_key)
     check(True, "U2F authenticate signature verifies")
 
-    if args.reset:
+
+
+def do_reset(args, ser, presence):
+    if True:
         print("\n[7] authenticatorReset (clean slate)")
         input("    Replug the key, then press Enter within 5 seconds of it booting... ")
         dev = find_device()
@@ -246,10 +272,6 @@ def main():
             threading.Timer(0.8, presence.prompt_up).start()
         Ctap2(dev).reset()
         check(Ctap2(dev).get_info().options.get("clientPin") is False, "reset clears PIN and passkeys")
-
-    ok = sum(r for r, _ in results)
-    print(f"\n{ok}/{len(results)} checks passed")
-    sys.exit(0 if ok == len(results) else 1)
 
 
 if __name__ == "__main__":

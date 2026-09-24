@@ -129,7 +129,6 @@ Ctap2Engine::Ctap2Engine()
     : _upPrompt(nullptr), _readyAt(0), _pinSet(false), _pinRetries(FIDO_PIN_MAX_RETRIES), _consecutivePinFails(0),
       _hasEphemKey(false), _pinTokenValid(false) {
     memcpy(_aaguid, TKEY_AAGUID, 16);
-    strncpy(_masterPin, "1234", sizeof(_masterPin) - 1);
     mbedtls_platform_zeroize(_pinHash, sizeof(_pinHash));
     mbedtls_platform_zeroize(_ephemPrivKey, sizeof(_ephemPrivKey));
     mbedtls_platform_zeroize(_ephemPubKeyRaw, sizeof(_ephemPubKeyRaw));
@@ -148,12 +147,6 @@ void Ctap2Engine::begin() {
               prefs.getBytes("pin_hash", _pinHash, sizeof(_pinHash)) == sizeof(_pinHash);
     prefs.end();
 
-    prefs.begin("vault_sec", true);
-    String savedPin = prefs.getString("user_pin", "1234");
-    strncpy(_masterPin, savedPin.c_str(), sizeof(_masterPin) - 1);
-    _masterPin[sizeof(_masterPin) - 1] = '\0';
-    prefs.end();
-
     ctapHid.setCborHandler([](uint32_t cid, const uint8_t* req, uint16_t reqLen) {
         ctap2Engine.handleCborRequest(cid, req, reqLen);
     });
@@ -161,22 +154,6 @@ void Ctap2Engine::begin() {
         ctap2Engine.handleCtap1Msg(cid, req, reqLen);
     });
     Serial.printf("[CTAP2] Ready: %u passkey(s), FIDO PIN %s\n", fidoStore.count(), _pinSet ? "set" : "not set");
-}
-
-void Ctap2Engine::setMasterPin(const char* pin) {
-    if (!pin) return;
-    strncpy(_masterPin, pin, sizeof(_masterPin) - 1);
-    _masterPin[sizeof(_masterPin) - 1] = '\0';
-
-    Preferences prefs;
-    prefs.begin("vault_sec", false);
-    prefs.putString("user_pin", _masterPin);
-    prefs.end();
-}
-
-bool Ctap2Engine::isPinValid(const char* candidatePin) const {
-    if (!candidatePin) return false;
-    return (strcmp(_masterPin, candidatePin) == 0);
 }
 
 void Ctap2Engine::setPinRetries(uint8_t retries) {

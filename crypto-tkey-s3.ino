@@ -38,6 +38,7 @@ __attribute__((constructor(101))) void pre_init_early() {
 #include "src/ctap2.h"
 #include "src/crypto_coins.h"
 #include "src/seed_gen.h"
+#include "src/pin_vault.h"
 #include "src/portfolio_mgr.h"
 #include "src/wifi_manager.h"
 #include "src/web_portal.h"
@@ -57,8 +58,7 @@ Preferences   vaultPrefs;
 
 // ─── Global State ────────────────────────────────────────────────────────────
 DeviceState   deviceState = STATE_IDLE_READY;
-char          masterPin[PIN_LENGTH + 1] = DEFAULT_MASTER_PIN;
-int           masterPinLen = 4;
+int           masterPinLen = 4;   // digits of the vault PIN (the hash lives in PinVault)
 uint8_t       dispRotation = DISP_ROTATION;
 char          pinDigits[PIN_LENGTH + 1] = "0000";
 int           pinIndex = 0;
@@ -106,6 +106,7 @@ void processAirGapSdSignState(ButtonEvent ev);
 void scanAndRenderAirGapPsbt();
 void parseWalletSeedWords();
 void resetPinEntry();
+void startSeedGeneration(int wordCount);
 void loadSecurityConfig();
 bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistration);
 void renderCurrentPortfolioCard();
@@ -213,22 +214,20 @@ void loop() {
     if (portal && portal->isRunning()) {
         portal->update();
         if (portal->isSetupDone()) {
-            strncpy(masterPin, portal->getNewPin(), PIN_LENGTH);
-            masterPin[PIN_LENGTH] = '\0';
-            masterPinLen = strlen(masterPin);
-            if (masterPinLen < PIN_MIN_LENGTH) masterPinLen = PIN_MIN_LENGTH;
-            if (masterPinLen > PIN_MAX_LENGTH) masterPinLen = PIN_MAX_LENGTH;
+            if (!PinVault::setPin(portal->getNewPin())) {
+                Serial.println("[SETUP] ⚠️ PIN rejected (4-8 digits); keeping the previous PIN");
+            }
+            if (!PinVault::setDuressPin(portal->getNewDuressPin())) {
+                Serial.println("[SETUP] ⚠️ Duress PIN rejected (4-8 digits, must differ from the PIN)");
+            }
+            masterPinLen = PinVault::length();
 
             vaultPrefs.begin("vault_sec", false);
-            vaultPrefs.putString("user_pin", masterPin);
-            vaultPrefs.putString("duress_pin", portal->getNewDuressPin());
             if (strlen(portal->getSetupPasswordHash()) > 0) {
                 vaultPrefs.putString("setup_pwd_hash", portal->getSetupPasswordHash());
             }
             vaultPrefs.putBool("provisioned", true);
             vaultPrefs.end();
-
-            ctap2Engine.setMasterPin(masterPin);
 
             portal->stop();
             rgb.flashRainbow(800);
@@ -469,13 +468,31 @@ void processPinEntryState(ButtonEvent ev) {
             rgb.flashTap(0, 255, 100, 100);
         } else {
             pinDigits[masterPinLen] = '\0';
-            Serial.printf("[PIN] Validating PIN: %s\n", pinDigits);
+            PinVault::Result pr = PinVault::check(pinDigits);
+            CryptoWallet::secureZero(pinDigits, sizeof(pinDigits));
 
-            if (strcmp(pinDigits, EMERGENCY_DURESS_PIN) == 0) {
+            if (pr == PinVault::DURESS) {
                 DuressWipe::execute(*tft, rgb, "DURESS_PIN");
-            } else if (strcmp(pinDigits, masterPin) == 0) {
-                Serial.println("[VAULT] Master PIN Accepted! Unlocked.");
-                wallet->unlock(pinDigits);
+            } else if (pr == PinVault::LOCKED_OUT) {
+                Serial.println("[AUTH] Too many wrong PINs: anti-hammering wipe");
+                DuressWipe::execute(*tft, rgb, "PIN_ATTEMPTS");
+            } else if (pr == PinVault::OK && !wallet->hasSeed()) {
+                Serial.println("[VAULT] PIN accepted. No wallet yet: starting seed creation.");
+                ui.renderSuccessBanner("CREATE YOUR WALLET", "TAP 12x FOR ENTROPY");
+                delay(1500);
+                startSeedGeneration(12);
+            } else if (pr == PinVault::OK) {
+                ui.renderSuccessBanner("PIN ACCEPTED", "UNLOCKING VAULT...");
+                if (!wallet->unlock()) {
+                    ui.renderErrorBanner("Seed Unreadable");
+                    rgb.setMode(LED_MODE_STROBE_RED);
+                    delay(1500);
+                    deviceState = STATE_IDLE_READY;
+                    rgb.setMode(LED_MODE_BREATHE_CYAN);
+                    ui.renderReadyDashboard(millis() / 1000, true, false);
+                    return;
+                }
+                Serial.println("[VAULT] PIN accepted. Vault unlocked.");
                 rgb.flashRainbow(800);
                 ui.renderSuccessBanner("VAULT UNLOCKED", "CRYPTO SIGNER READY");
                 delay(1200);
@@ -483,8 +500,10 @@ void processPinEntryState(ButtonEvent ev) {
                 deviceState = STATE_VAULT_DASHBOARD;
                 showVaultCoinScreen(COIN_BTC);
             } else {
-                Serial.println("[AUTH] Invalid PIN entered!");
-                ui.renderErrorBanner("Wrong PIN Code");
+                Serial.printf("[AUTH] Wrong PIN (%u attempts left before wipe)\n", PinVault::attemptsLeft());
+                char left[24];
+                snprintf(left, sizeof(left), "%u TRIES LEFT", PinVault::attemptsLeft());
+                ui.renderErrorBanner(PinVault::attemptsLeft() <= 3 ? left : "Wrong PIN Code");
                 rgb.setMode(LED_MODE_STROBE_RED);
                 delay(1200);
                 resetPinEntry();
@@ -831,7 +850,7 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
 void resetPinEntry() {
     pinIndex = 0;
     currentDigitVal = 0;
-    masterPinLen = strlen(masterPin);
+    masterPinLen = PinVault::length();
     if (masterPinLen < PIN_MIN_LENGTH) masterPinLen = PIN_MIN_LENGTH;
     if (masterPinLen > PIN_MAX_LENGTH) masterPinLen = PIN_MAX_LENGTH;
     for (int i = 0; i < masterPinLen; i++) pinDigits[i] = '0';
@@ -843,19 +862,13 @@ void loadSecurityConfig() {
     dispRotation = vaultPrefs.getUChar("disp_rot", DISP_ROTATION);
     if (!vaultPrefs.isKey("provisioned")) {
         vaultPrefs.putBool("provisioned", false);
-        vaultPrefs.putString("user_pin", DEFAULT_MASTER_PIN);
-        strncpy(masterPin, DEFAULT_MASTER_PIN, PIN_LENGTH);
-    } else {
-        String savedPin = vaultPrefs.getString("user_pin", DEFAULT_MASTER_PIN);
-        strncpy(masterPin, savedPin.c_str(), PIN_LENGTH);
     }
-    masterPin[PIN_LENGTH] = '\0';
-    masterPinLen = strlen(masterPin);
-    if (masterPinLen < PIN_MIN_LENGTH) masterPinLen = PIN_MIN_LENGTH;
-    if (masterPinLen > PIN_MAX_LENGTH) masterPinLen = PIN_MAX_LENGTH;
     vaultPrefs.end();
 
-    ctap2Engine.setMasterPin(masterPin);
+    PinVault::begin();  // migrates any legacy plaintext PIN to a salted hash
+    masterPinLen = PinVault::length();
+    if (masterPinLen < PIN_MIN_LENGTH) masterPinLen = PIN_MIN_LENGTH;
+    if (masterPinLen > PIN_MAX_LENGTH) masterPinLen = PIN_MAX_LENGTH;
 }
 
 void handleSerialCommands() {
@@ -920,19 +933,20 @@ void handleSerialCommands() {
         ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
         Serial.printf("[SCREEN] Flipped to rotation %d\n", dispRotation);
     } else if (cmd.startsWith("unlock ")) {
+#ifdef TKEY_TEST_SERIAL_TOUCH
         String pin = cmd.substring(7);
         pin.trim();
-        if (wallet->unlock(pin.c_str())) {
-            rgb.flashRainbow(800);
+        if (PinVault::check(pin.c_str()) == PinVault::OK && wallet->unlock()) {
             deviceState = STATE_VAULT_DASHBOARD;
             showVaultCoinScreen(COIN_BTC);
-            Serial.println("[VAULT] ✅ Unlocked successfully! Master keys derived in memory.");
+            Serial.println("[VAULT] ✅ Unlocked (test build).");
         } else {
-            rgb.setMode(LED_MODE_STROBE_RED);
-            delay(1000);
-            rgb.setMode(LED_MODE_SOLID_AMBER);
-            Serial.println("[VAULT] ❌ Error: Invalid PIN.");
+            Serial.println("[VAULT] ❌ Error: Invalid PIN or no wallet seed.");
         }
+#else
+        // Any local process can open the CDC port: the PIN is only entered on the device.
+        Serial.println("[VAULT] Serial unlock is disabled; enter the PIN on the device.");
+#endif
     } else if (cmd.equalsIgnoreCase("addresses")) {
         if (!wallet->isUnlocked()) {
             Serial.println("[VAULT] 🔒 Error: Vault is LOCKED. Unlock first with 'unlock <PIN>' or via device screen.");
@@ -949,13 +963,14 @@ void handleSerialCommands() {
     } else if (cmd.equalsIgnoreCase("seed") || cmd.startsWith("seed ") || cmd.startsWith("showseed")) {
         if (!wallet || !wallet->isUnlocked()) {
             Serial.println("[VAULT] 🔒 Error: Vault locked. Unlock with 'unlock <PIN>' first.");
+#ifdef TKEY_TEST_SERIAL_TOUCH
         } else if (cmd.indexOf("--allow-serial") != -1 || cmd.indexOf("--insecure-serial-dump") != -1) {
-            Serial.printf("[VAULT] ⚠️ INSECURE SERIAL EXPORT: %s\n", wallet->getMnemonicPhrase());
+            Serial.printf("[VAULT] ⚠️ INSECURE SERIAL EXPORT (test build): %s\n", wallet->getMnemonicPhrase());
+#endif
         } else {
             Serial.println("[VAULT] 🛡️ Zero-Seed-Leakage Air-Gap Policy Active.");
             Serial.println("  Seed words are displayed EXCLUSIVELY on physical 160x80 LCD screen.");
             Serial.println("  To view on screen: Enter Vault (PIN) -> Double Click button.");
-            Serial.println("  (For automated test harnesses, append '--allow-serial' to command).");
         }
     } else if (cmd.equalsIgnoreCase("lock")) {
         wallet->lock();
@@ -1018,7 +1033,14 @@ void handleSerialCommands() {
                 Serial.println("[PSBT] ℹ️ Error: No pending .psbt file found.");
             }
         } else if (sub.equalsIgnoreCase("sign")) {
+#ifndef TKEY_TEST_SERIAL_TOUCH
+            // Signing needs the on-device review screen (vault -> very long press).
+            Serial.println("[PSBT] Serial signing is disabled; sign on the device (vault -> very long press).");
+            if (true) {
+            } else if (!wallet->isUnlocked()) {
+#else
             if (!wallet->isUnlocked()) {
+#endif
                 Serial.println("[PSBT] 🔒 Error: Vault must be UNLOCKED first. Run 'unlock <PIN>'.");
             } else {
                 char p[64];
@@ -1050,9 +1072,12 @@ void handleSerialCommands() {
         } else if (sub.startsWith("backup")) {
             String pin = sub.substring(6);
             pin.trim();
-            if (pin.length() == 0) pin = masterPin;
             const char* mnemonic = wallet->getMnemonicPhrase();
-            if (!mnemonic || strlen(mnemonic) == 0) {
+            if (!wallet->isUnlocked()) {
+                Serial.println("[SD VAULT] 🔒 Unlock the vault on the device first.");
+            } else if (pin.length() < PIN_MIN_LENGTH) {
+                Serial.println("[SD VAULT] Usage: vault backup <backup PIN> (4+ digits)");
+            } else if (!mnemonic || strlen(mnemonic) == 0) {
                 Serial.println("[SD VAULT] ❌ Error: No seed mnemonic active in wallet.");
             } else if (sdVault.backupSeed(mnemonic, pin.c_str())) {
                 rgb.flashRainbow(800);
@@ -1063,14 +1088,18 @@ void handleSerialCommands() {
         } else if (sub.startsWith("restore")) {
             String pin = sub.substring(7);
             pin.trim();
-            if (pin.length() == 0) pin = masterPin;
             char restoredMnemonic[256] = {0};
-            if (sdVault.restoreSeed(restoredMnemonic, sizeof(restoredMnemonic), pin.c_str())) {
-                rgb.flashRainbow(1200);
-                Serial.println("[SD VAULT] 🔓✅ Restore SUCCESS: Seed decrypted & verified via GCM Auth Tag.");
-                Serial.printf("  Decrypted Mnemonic: %s\n", restoredMnemonic);
-                wallet->setMnemonic(restoredMnemonic);
-                Serial.println("  Addresses re-derived in memory.");
+            if (wallet->hasSeed() && !wallet->isUnlocked()) {
+                Serial.println("[SD VAULT] 🔒 A wallet exists: unlock it on the device before replacing it.");
+            } else if (sdVault.restoreSeed(restoredMnemonic, sizeof(restoredMnemonic), pin.c_str())) {
+                bool ok = wallet->setMnemonic(restoredMnemonic);
+                CryptoWallet::secureZero(restoredMnemonic, sizeof(restoredMnemonic));
+                if (ok) {
+                    rgb.flashRainbow(1200);
+                    Serial.println("[SD VAULT] 🔓✅ Restore SUCCESS: seed verified (GCM + BIP-39 checksum) and stored.");
+                } else {
+                    Serial.println("[SD VAULT] ❌ Restored data is not a valid BIP-39 seed; wallet unchanged.");
+                }
             } else {
                 Serial.println("[SD VAULT] ❌ Error: Decryption or GCM integrity check failed! Wrong PIN, wrong hardware, or file tampered.");
             }
@@ -1086,38 +1115,52 @@ void handleSerialCommands() {
     } else if (cmd.startsWith("newseed")) {
         int words = 12;
         if (cmd.indexOf("24") != -1) words = 24;
+#ifdef TKEY_TEST_SERIAL_TOUCH
         if (cmd.indexOf("quick") != -1 || cmd.indexOf("auto") != -1 || cmd.indexOf("trng") != -1) {
             char phrase[240] = {0};
             SeedGenerator::resetEntropy();
-            bool ok = (words == 24) 
+            bool ok = (words == 24)
                 ? SeedGenerator::generateMnemonic24Words(phrase, sizeof(phrase))
                 : SeedGenerator::generateMnemonic12Words(phrase, sizeof(phrase));
-            if (ok && wallet) {
-                wallet->setMnemonic(phrase);
-                Serial.printf("[SEED] ✅ Generated genuine %d-word BIP-39 mnemonic via hardware TRNG:\n", words);
-                Serial.printf("  %s\n", phrase);
-                Serial.println("  Active crypto wallet updated and root addresses derived.");
+            if (ok && wallet && wallet->setMnemonic(phrase)) {
+                Serial.printf("[SEED] ✅ (test build) %d-word mnemonic: %s\n", words, phrase);
             } else {
                 Serial.println("[SEED] ❌ Failed to generate mnemonic.");
             }
-        } else {
-            startSeedGeneration(words);
+            CryptoWallet::secureZero(phrase, sizeof(phrase));
+            return;
         }
+#endif
+        if (wallet->hasSeed() && !wallet->isUnlocked()) {
+            Serial.println("[SEED] 🔒 A wallet exists: unlock it on the device before replacing it.");
+        } else {
+            startSeedGeneration(words);  // words are shown only on the device screen
+        }
+#ifdef TKEY_TEST_SERIAL_TOUCH
+    } else if (cmd.startsWith("wallet check ")) {
+        Serial.printf("[TEST] mnemonic valid: %s\n", CryptoWallet::isValidMnemonic(cmd.substring(13).c_str()) ? "YES" : "NO");
+    } else if (cmd.equalsIgnoreCase("wallet selftest")) {
+        char cached[COIN_COUNT][64];
+        for (int i = 0; i < COIN_COUNT; i++) strncpy(cached[i], wallet->getAddress((CryptoCoin)i), 63);
+        uint32_t t0 = millis();
+        bool ok = wallet->unlock();
+        uint32_t dt = millis() - t0;
+        bool match = ok;
+        for (int i = 0; ok && i < COIN_COUNT; i++) match &= strcmp(cached[i], wallet->getAddress((CryptoCoin)i)) == 0;
+        Serial.printf("[TEST] unlock=%d (%lu ms) cached==derived:%s ETH=%s\n", ok, dt, match ? "YES" : "NO", wallet->getAddress(COIN_ETH));
+        wallet->lock();
+        Serial.printf("[TEST] after lock: mnemonic cleared=%s\n", strlen(wallet->getMnemonicPhrase()) == 0 ? "YES" : "NO");
+    } else if (cmd.equalsIgnoreCase("wallet wipe")) {
+        wallet->lock();
+        Preferences p;
+        p.begin("wallet_seed", false);
+        p.clear();
+        p.end();
+        Serial.println("[TEST] wallet_seed namespace erased; reboot for a clean state.");
+#endif
     } else if (cmd.startsWith("setpin ")) {
-        String newPin = cmd.substring(7);
-        newPin.trim();
-        if (newPin.length() >= PIN_MIN_LENGTH && newPin.length() <= PIN_MAX_LENGTH) {
-            strncpy(masterPin, newPin.c_str(), PIN_LENGTH);
-            masterPin[PIN_LENGTH] = '\0';
-            masterPinLen = strlen(masterPin);
-            vaultPrefs.begin("vault_sec", false);
-            vaultPrefs.putString("user_pin", masterPin);
-            vaultPrefs.end();
-            ctap2Engine.setMasterPin(masterPin);
-            Serial.printf("Master PIN successfully changed to: %s (%d digits)\n", masterPin, masterPinLen);
-        } else {
-            Serial.printf("Error: PIN must be between %d and %d digits.\n", PIN_MIN_LENGTH, PIN_MAX_LENGTH);
-        }
+        // PIN changes go through the password-protected setup portal, never an open serial port.
+        Serial.println("Error: serial PIN changes are disabled; use the setup portal.");
     } else if (cmd.startsWith("decode_evm ") || cmd.startsWith("sign_evm ")) {
         bool isSignCmd = cmd.startsWith("sign_evm ");
         String hexTx = cmd.substring(cmd.indexOf(' ') + 1);
@@ -1142,7 +1185,13 @@ void handleSerialCommands() {
             rgb.setMode(LED_MODE_SOLID_AMBER);
 
             if (isSignCmd) {
+#ifndef TKEY_TEST_SERIAL_TOUCH
+                // Signing must be confirmed on the device, never triggered from an open serial port.
+                Serial.println("[EVM] Serial signing is disabled; review and sign on the device.");
+                if (false) {
+#else
                 if (wallet->isUnlocked()) {
+#endif
                     char sigHex[130] = {0};
                     if (wallet->executeSign(sigHex, sizeof(sigHex))) {
                         Serial.println("[EVM] ✍️ Transaction Signed via secp256k1 (m/44'/60'/0'/0/0):");
@@ -1151,18 +1200,22 @@ void handleSerialCommands() {
                         Serial.println("[EVM] ❌ Error executing signature.");
                     }
                 } else {
-                    Serial.println("[EVM] ⚠️ Vault is LOCKED. Unlock first with 'unlock <PIN>' to generate signature.");
+                    Serial.println("[EVM] ⚠️ Vault is LOCKED. Unlock it on the device first.");
                 }
             }
         } else {
             Serial.println("[EVM] ❌ Error: Failed to parse RLP transaction stream.");
         }
     } else if (cmd.equalsIgnoreCase("panic CONFIRM") || cmd.equalsIgnoreCase("panic NUKE")) {
+#ifdef TKEY_TEST_SERIAL_TOUCH
         Serial.println("[PANIC] 🚨 CONFIRMATION RECEIVED. Executing cryptographic flash scrub...");
         DuressWipe::execute(*tft, rgb, "SERIAL_PANIC");
+#else
+        // A wipe destroys every FIDO key and the wallet: only the physical panic hold may do it.
+        Serial.println("[PANIC] Serial wipe is disabled; hold the device button >6 s.");
+#endif
     } else if (cmd.equalsIgnoreCase("panic")) {
         Serial.println("[PANIC] ⚠️ SAFEGUARD GUARD: Accidental execution blocked.");
-        Serial.println("  To completely wipe NVS flash and all cryptographic keys, run: 'panic CONFIRM'");
         Serial.println("  Or hold the physical device button for >6 seconds.");
     }
 }

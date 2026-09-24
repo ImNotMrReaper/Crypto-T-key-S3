@@ -4,6 +4,37 @@
 
 #include "crypto_wallet.h"
 #include "seed_gen.h"
+#include <Preferences.h>
+#include <esp_random.h>
+#include <mbedtls/gcm.h>
+#include <mbedtls/sha256.h>
+#include <mbedtls/platform_util.h>
+
+// Seed at rest: AES-256-GCM under a random per-device key, NVS namespace "wallet_seed"
+// ("dev_key", "seed" = nonce || ciphertext || tag, "addr_*" = cached public addresses).
+// Confidentiality against a raw flash dump needs ESP32 flash + NVS encryption (phase 2);
+// this layer keeps the seed out of plaintext and binds it to this device's key.
+static const char* SEED_AAD = "tkey-s3-seed-v1";
+static const char* ADDR_KEYS[COIN_COUNT] = {"addr_btc", "addr_eth", "addr_sol", "addr_doge"};
+
+static bool walletDeviceKey(uint8_t key[32]) {
+    Preferences prefs;
+    prefs.begin("wallet_seed", false);
+    bool ok = prefs.getBytesLength("dev_key") == 32 && prefs.getBytes("dev_key", key, 32) == 32;
+    if (!ok) {
+        esp_fill_random(key, 32);
+        ok = prefs.putBytes("dev_key", key, 32) == 32;
+    }
+    prefs.end();
+    return ok;
+}
+
+// Key derivation at 80 MHz takes ~6 s; run it at full speed and drop back afterwards.
+struct CpuBoost {
+    uint32_t prev;
+    CpuBoost() : prev(getCpuFrequencyMhz()) { setCpuFrequencyMhz(240); }
+    ~CpuBoost() { setCpuFrequencyMhz(prev); }
+};
 #include <uECC.h>
 #include <SHA256.h>
 #include <SHA3.h>
@@ -23,50 +54,154 @@ void CryptoWallet::secureZero(void* ptr, size_t len) {
 void CryptoWallet::begin() {
     uECC_set_rng(&rng_wrapper);
 
-    // Default test seed mnemonic (BIP-39 standard test vector)
-    strncpy(_mnemonic, "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", sizeof(_mnemonic) - 1);
+    secureZero(_mnemonic, sizeof(_mnemonic));
 
     // Initialize accounts metadata
     _accounts[COIN_BTC].coin = COIN_BTC;
     _accounts[COIN_BTC].symbol = "BTC";
     _accounts[COIN_BTC].name = "Bitcoin SegWit";
     _accounts[COIN_BTC].derivationPath = "m/84'/0'/0'/0/0";
-    strncpy(_accounts[COIN_BTC].address, "bc1q7x4p89y3km2segwit", sizeof(_accounts[COIN_BTC].address) - 1);
 
     _accounts[COIN_ETH].coin = COIN_ETH;
     _accounts[COIN_ETH].symbol = "ETH";
     _accounts[COIN_ETH].name = "Ethereum / EVM";
     _accounts[COIN_ETH].derivationPath = "m/44'/60'/0'/0/0";
-    strncpy(_accounts[COIN_ETH].address, "0x71C8a9F0...89E2", sizeof(_accounts[COIN_ETH].address) - 1);
 
     _accounts[COIN_SOL].coin = COIN_SOL;
     _accounts[COIN_SOL].symbol = "SOL";
     _accounts[COIN_SOL].name = "Solana Network";
     _accounts[COIN_SOL].derivationPath = "m/44'/501'/0'/0'";
-    strncpy(_accounts[COIN_SOL].address, "7x4pM9yK...SOL", sizeof(_accounts[COIN_SOL].address) - 1);
 
     _accounts[COIN_DOGE].coin = COIN_DOGE;
     _accounts[COIN_DOGE].symbol = "DOGE";
     _accounts[COIN_DOGE].name = "Dogecoin";
     _accounts[COIN_DOGE].derivationPath = "m/44'/3'/0'/0/0";
     
-    // Derive real BIP-32/BIP-84/EIP-55 addresses immediately from master seed
-    deriveAllAccounts();
+    // Public addresses come from the cache; keys are only derived after a PIN unlock.
+    Preferences prefs;
+    prefs.begin("wallet_seed", true);
+    _hasSeed = prefs.getBytesLength("seed") > 28;
+    for (int i = 0; i < COIN_COUNT; i++) {
+        _accounts[i].address[0] = '\0';
+        if (_hasSeed) prefs.getString(ADDR_KEYS[i], _accounts[i].address, sizeof(_accounts[i].address));
+    }
+    prefs.end();
+    if (_hasSeed) publishAddresses();
+    Serial.printf("[WALLET] %s\n", _hasSeed ? "Seed present (encrypted). Locked." : "No wallet seed yet: create one from the vault menu.");
 }
 
-bool CryptoWallet::unlock(const char* pin) {
-    if (!pin) return false;
+bool CryptoWallet::unlock() {
+    if (!_hasSeed || !loadSeed()) return false;
+    {
+        CpuBoost boost;
+        deriveAllAccounts();
+    }
     _isUnlocked = true;
     return true;
 }
 
 void CryptoWallet::lock() {
     _isUnlocked = false;
-    // Wipe sensitive private keys from RAM
+    // Wipe sensitive key material from RAM (public addresses stay cached)
     for (int i = 0; i < COIN_COUNT; i++) {
         secureZero(_accounts[i].privKey, sizeof(_accounts[i].privKey));
     }
     secureZero(_masterSeed, sizeof(_masterSeed));
+    secureZero(_mnemonic, sizeof(_mnemonic));
+}
+
+bool CryptoWallet::storeSeed() {
+    uint8_t key[32];
+    if (!walletDeviceKey(key)) return false;
+    size_t n = strlen(_mnemonic);
+    uint8_t blob[12 + sizeof(_mnemonic) + 16];
+    esp_fill_random(blob, 12);
+    mbedtls_gcm_context gcm;
+    mbedtls_gcm_init(&gcm);
+    int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256);
+    if (rc == 0) {
+        rc = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, n, blob, 12,
+                                       (const uint8_t*)SEED_AAD, strlen(SEED_AAD),
+                                       (const uint8_t*)_mnemonic, blob + 12, 16, blob + 12 + n);
+    }
+    mbedtls_gcm_free(&gcm);
+    mbedtls_platform_zeroize(key, sizeof(key));
+    if (rc != 0) return false;
+
+    Preferences prefs;
+    prefs.begin("wallet_seed", false);
+    bool ok = prefs.putBytes("seed", blob, 12 + n + 16) == 12 + n + 16;
+    for (int i = 0; i < COIN_COUNT; i++) prefs.putString(ADDR_KEYS[i], _accounts[i].address);
+    prefs.end();
+    mbedtls_platform_zeroize(blob, sizeof(blob));
+    return ok;
+}
+
+bool CryptoWallet::loadSeed() {
+    uint8_t blob[12 + sizeof(_mnemonic) + 16];
+    Preferences prefs;
+    prefs.begin("wallet_seed", true);
+    size_t len = prefs.getBytesLength("seed");
+    bool ok = len > 28 && len <= sizeof(blob) && prefs.getBytes("seed", blob, len) == len;
+    prefs.end();
+    uint8_t key[32];
+    if (!ok || !walletDeviceKey(key)) return false;
+
+    size_t n = len - 28;
+    mbedtls_gcm_context gcm;
+    mbedtls_gcm_init(&gcm);
+    int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256);
+    if (rc == 0) {
+        rc = mbedtls_gcm_auth_decrypt(&gcm, n, blob, 12, (const uint8_t*)SEED_AAD, strlen(SEED_AAD),
+                                      blob + 12 + n, 16, blob + 12, (uint8_t*)_mnemonic);
+    }
+    mbedtls_gcm_free(&gcm);
+    mbedtls_platform_zeroize(key, sizeof(key));
+    mbedtls_platform_zeroize(blob, sizeof(blob));
+    if (rc != 0) {
+        secureZero(_mnemonic, sizeof(_mnemonic));
+        Serial.println("[WALLET] ❌ Stored seed failed authentication (corrupted or wrong device key)");
+        return false;
+    }
+    _mnemonic[n] = '\0';
+    return true;
+}
+
+bool CryptoWallet::isValidMnemonic(const char* phrase) {
+    if (!phrase) return false;
+    uint16_t idx[24];
+    int count = 0;
+    char buf[240];
+    strncpy(buf, phrase, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    for (char* w = strtok(buf, " "); w; w = strtok(nullptr, " ")) {
+        if (count >= 24) return false;
+        uint16_t i = SeedGenerator::getWordIndex(w);
+        if (i == 0 && strcmp(w, "abandon") != 0) return false;  // index 0 doubles as "not found"
+        idx[count++] = i;
+    }
+    secureZero(buf, sizeof(buf));
+    if (count != 12 && count != 24) return false;
+
+    // 11 bits per word = entropy || checksum (entropy bits / 32)
+    uint8_t bits[33] = {0};
+    for (int w = 0; w < count; w++) {
+        for (int b = 0; b < 11; b++) {
+            if (idx[w] & (1 << (10 - b))) {
+                int pos = w * 11 + b;
+                bits[pos / 8] |= 0x80 >> (pos % 8);
+            }
+        }
+    }
+    int entBytes = count == 12 ? 16 : 32;
+    int csBits = entBytes / 4;
+    uint8_t hash[32];
+    mbedtls_sha256(bits, entBytes, hash, 0);
+    uint8_t expected = hash[0] >> (8 - csBits);
+    uint8_t actual = bits[entBytes] >> (8 - csBits);
+    secureZero(bits, sizeof(bits));
+    secureZero(idx, sizeof(idx));
+    return expected == actual;
 }
 
 const char* CryptoWallet::getMnemonicPhrase() const {
@@ -84,10 +219,22 @@ void CryptoWallet::generateNewMnemonic() {
 }
 
 bool CryptoWallet::setMnemonic(const char* phrase) {
-    if (!phrase || strlen(phrase) == 0 || strlen(phrase) >= sizeof(_mnemonic)) return false;
+    if (!phrase || strlen(phrase) >= sizeof(_mnemonic) || !isValidMnemonic(phrase)) return false;
+    bool wasUnlocked = _isUnlocked;
     strncpy(_mnemonic, phrase, sizeof(_mnemonic) - 1);
     _mnemonic[sizeof(_mnemonic) - 1] = '\0';
-    deriveAllAccounts();
+    {
+        CpuBoost boost;
+        deriveAllAccounts();
+    }
+    if (!storeSeed()) {
+        Serial.println("[WALLET] ❌ Failed to persist seed");
+        lock();
+        return false;
+    }
+    _hasSeed = true;
+    _isUnlocked = true;
+    if (!wasUnlocked) lock();  // keys only stay in RAM while the vault is unlocked
     return true;
 }
 
@@ -137,6 +284,12 @@ void CryptoWallet::deriveAllAccounts() {
     deriveDogeAddress(_accounts[COIN_DOGE]);
 
     // Update global coin registry with real deposit addresses
+    publishAddresses();
+    Serial.println("[WALLET] Addresses derived from the stored seed.");
+}
+
+// Pushes the (public) receive addresses into the coin registry for the portfolio tracker.
+void CryptoWallet::publishAddresses() {
     CoinAsset* btcCoin = CryptoCoinRegistry::getCoin(COIN_ID_BTC);
     if (btcCoin) strncpy(btcCoin->address, _accounts[COIN_BTC].address, sizeof(btcCoin->address) - 1);
 
@@ -146,11 +299,6 @@ void CryptoWallet::deriveAllAccounts() {
     CoinAsset* solCoin = CryptoCoinRegistry::getCoin(COIN_ID_SOL);
     if (solCoin) strncpy(solCoin->address, _accounts[COIN_SOL].address, sizeof(solCoin->address) - 1);
 
-    Serial.println("[WALLET] Real Addresses Derived from BIP-39 Seed:");
-    Serial.printf("[WALLET]  BTC (BIP-84): %s\n", _accounts[COIN_BTC].address);
-    Serial.printf("[WALLET]  ETH (EIP-55): %s\n", _accounts[COIN_ETH].address);
-    Serial.printf("[WALLET]  SOL (Base58): %s\n", _accounts[COIN_SOL].address);
-    Serial.printf("[WALLET]  DOGE (B58)  : %s\n", _accounts[COIN_DOGE].address);
 }
 
 void CryptoWallet::deriveBtcAddress(WalletAccount& acc) {

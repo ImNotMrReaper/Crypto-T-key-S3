@@ -74,11 +74,6 @@ public:
     typedef bool (*UserPresencePrompt)(uint32_t cid, const char* rpId, bool isRegistration);
     void setUserPresencePrompt(UserPresencePrompt prompt) { _upPrompt = prompt; }
 
-    // Vault master PIN (device UI / crypto wallet). Independent of the FIDO2 clientPIN.
-    void setMasterPin(const char* pin);
-    const char* getMasterPin() const { return _masterPin; }
-    bool isPinValid(const char* candidatePin) const;
-
     // FIDO2 clientPIN state (set from the browser / fido2-token, stored as LEFT(SHA-256(PIN), 16))
     bool isFidoPinSet() const { return _pinSet; }
     uint8_t getPinRetries() const { return _pinRetries; }
@@ -109,8 +104,6 @@ private:
     UserPresencePrompt _upPrompt;
     uint8_t _aaguid[16];
     uint32_t _readyAt;
-
-    char    _masterPin[16];
 
     // ClientPIN (PIN protocol 1)
     bool    _pinSet;
