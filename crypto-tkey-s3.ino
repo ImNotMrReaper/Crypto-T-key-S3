@@ -848,6 +848,7 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
 
     uint32_t start = millis();
     uint32_t lastKeepAlive = 0;
+    uint8_t keepAliveFailures = 0;
     bool confirmed = false;
     bool done = false;
 
@@ -857,9 +858,19 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
         ctapHid.process();
         handleSerialCommands();
 
-        // Send FIDO2 CTAPHID Keepalive (UP Needed) every 250ms to keep host browser active
+        // Send FIDO2 CTAPHID Keepalive (UP Needed) every 250ms to keep host browser active.
+        // If the host stops reading (the requesting program was killed, e.g. sudo timed
+        // out), keepalives can't be delivered: abandon the prompt instead of showing it
+        // for the full 30 s and colliding with the next request.
         if (millis() - lastKeepAlive >= 250) {
-            ctapHid.sendKeepAlive(cid, CTAPHID_STATUS_UPNEEDED);
+            if (ctapHid.sendKeepAlive(cid, CTAPHID_STATUS_UPNEEDED)) {
+                keepAliveFailures = 0;
+            } else if (++keepAliveFailures >= 3) {
+                Serial.println("[FIDO2] Host stopped listening: prompt abandoned");
+                ui.renderErrorBanner("Request Ended");
+                delay(400);
+                done = true;
+            }
             lastKeepAlive = millis();
         }
 
