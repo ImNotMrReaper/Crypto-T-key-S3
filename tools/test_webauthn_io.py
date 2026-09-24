@@ -34,11 +34,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--attestation", default="direct", choices=["none", "indirect", "direct"])
     ap.add_argument("--discoverable", action="store_true", help="register a passkey (resident key)")
+    ap.add_argument("--vid", type=lambda v: int(v, 16), default=0x303A,
+                    help="USB vendor ID of the key to test (303a = TKey, 1209 = reaper-fido)")
     args = ap.parse_args()
 
-    dev = next((d for d in CtapHidDevice.list_devices() if d.descriptor.vid == 0x303A), None)
+    dev = next((d for d in CtapHidDevice.list_devices() if d.descriptor.vid == args.vid), None)
     if not dev:
-        sys.exit("Crypto TKey S3 not found")
+        sys.exit(f"no FIDO key with vendor {args.vid:04x} found")
     client = Fido2Client(dev, DefaultClientDataCollector(BASE), Button())
     http = requests.Session()
     http.get(BASE)
