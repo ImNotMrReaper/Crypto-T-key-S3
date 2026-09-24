@@ -61,6 +61,16 @@
 
 #define FIDO_PIN_MAX_RETRIES        8
 
+// hmac-secret extension request (getAssertion): platform key agreement key, encrypted salts
+struct HmacSecretReq {
+    bool     present;
+    uint8_t  platformKey[64];   // X || Y
+    const uint8_t* saltEnc;     // 32 or 64 bytes
+    size_t   saltEncLen;
+    const uint8_t* saltAuth;    // 16 bytes
+    size_t   saltAuthLen;
+};
+
 class Ctap2Engine {
 public:
     Ctap2Engine();
@@ -96,7 +106,10 @@ private:
     bool checkPinAuth(const uint8_t* pinAuth, size_t len, const uint8_t* clientDataHash);
     void sendAssertion(uint32_t cid, const char* rpId, const uint8_t* clientDataHash,
                        const uint8_t* credId, const ResidentCred* rk, uint8_t flags,
-                       bool withUserDetails, uint8_t numberOfCredentials);
+                       bool withUserDetails, uint8_t numberOfCredentials,
+                       const struct HmacSecretReq* hmac = nullptr);
+    bool hmacSecretOutput(const uint8_t* credId, const struct HmacSecretReq& req,
+                          uint8_t* extCbor, size_t* extLen);
     void storePinHash(const uint8_t* hash16);
     void setPinRetries(uint8_t retries);
     uint8_t pinFailure();

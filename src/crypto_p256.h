@@ -41,6 +41,9 @@ public:
     static bool aes256CbcDecrypt(const uint8_t* key32, const uint8_t* iv16, const uint8_t* in, size_t len, uint8_t* out);
     static bool aes256CbcEncrypt(const uint8_t* key32, const uint8_t* iv16, const uint8_t* in, size_t len, uint8_t* out);
 
+    // hmac-secret: per-credential CredRandom = HMAC(master, "hmac-secret" || credId)
+    void deriveCredRandom(const uint8_t* credId, size_t credIdLen, uint8_t out32[32]);
+
     // authenticatorReset: replace the master secret, invalidating every credential ever issued
     bool rotateMasterSecret();
 

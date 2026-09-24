@@ -240,12 +240,16 @@ void Ctap2Engine::handleGetInfo(uint32_t cid) {
     respBuf[0] = CTAP2_OK;
     CborEncoder enc(respBuf + 1, sizeof(respBuf) - 1);
 
-    enc.encodeMapHeader(7);
+    enc.encodeMapHeader(8);
 
     enc.encodeUnsigned(0x01);  // versions
     enc.encodeArrayHeader(2);
     enc.encodeText("U2F_V2");
     enc.encodeText("FIDO_2_0");
+
+    enc.encodeUnsigned(0x02);  // extensions (LUKS / systemd-cryptenroll, KeePassXC, PRF)
+    enc.encodeArrayHeader(1);
+    enc.encodeText("hmac-secret");
 
     enc.encodeUnsigned(0x03);  // aaguid
     enc.encodeBytes(_aaguid, 16);
@@ -302,6 +306,7 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
     size_t pinAuthLen = 0;
     bool havePinAuth = false;
     uint64_t pinProtocol = 0;
+    bool wantHmacSecret = false;
 
     for (size_t i = 0; i < mapCount; i++) {
         uint64_t key = 0;
@@ -311,6 +316,17 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
             case 0x01:
                 ok = dec.readBytes(&clientDataHash, &clientDataHashLen);
                 break;
+            case 0x06: {  // extensions {"hmac-secret": true, ...}
+                size_t m = 0;
+                ok = dec.readMapHeader(&m);
+                for (size_t e = 0; ok && e < m; e++) {
+                    char k[24] = {0};
+                    if (!readTextKey(dec, k, sizeof(k))) continue;
+                    if (strcmp(k, "hmac-secret") == 0) ok = dec.readBool(&wantHmacSecret);
+                    else ok = dec.skipValue();
+                }
+                break;
+            }
             case 0x02: {  // rp {id, name}
                 size_t m = 0;
                 ok = haveRp = dec.readMapHeader(&m);
@@ -463,6 +479,14 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
     adOffset += 32;
     memcpy(authData + adOffset, coseKey, coseEnc.getLength());
     adOffset += coseEnc.getLength();
+    if (wantHmacSecret) {  // CredRandom is derived on demand from the master secret + credId
+        CborEncoder ext(authData + adOffset, sizeof(authData) - adOffset);
+        ext.encodeMapHeader(1);
+        ext.encodeText("hmac-secret");
+        ext.encodeBool(true);
+        adOffset += ext.getLength();
+        authData[32] |= AUTHDATA_FLAG_ED;
+    }
 
     // 4. packed attestation: sig = ECDSA(attestation key, SHA-256(authData || clientDataHash))
     uint8_t sigInput[256 + 32];
@@ -499,16 +523,59 @@ void Ctap2Engine::handleMakeCredential(uint32_t cid, CborDecoder& dec) {
     ctapHid.sendResponse(cid, CTAPHID_CMD_CBOR, respBuf, 1 + respEnc.getLength());
 }
 
+bool Ctap2Engine::hmacSecretOutput(const uint8_t* credId, const HmacSecretReq& req,
+                                   uint8_t* extCbor, size_t* extLen) {
+    if (!_hasEphemKey || req.saltAuthLen != 16 || (req.saltEncLen != 32 && req.saltEncLen != 64)) return false;
+    uint8_t shared[32];
+    if (!cryptoP256.computeSharedSecretP256(_ephemPrivKey, req.platformKey, shared)) return false;
+
+    uint8_t mac[32];
+    CryptoP256::hmacSha256(shared, 32, req.saltEnc, req.saltEncLen, mac);
+    bool authOk = constantTimeEqual(mac, req.saltAuth, 16);
+    uint8_t salts[64], out[64], credRandom[32];
+    bool ok = false;
+    if (authOk) {
+        CryptoP256::aes256CbcDecrypt(shared, NULL, req.saltEnc, req.saltEncLen, salts);
+        cryptoP256.deriveCredRandom(credId, 32, credRandom);
+        CryptoP256::hmacSha256(credRandom, 32, salts, 32, out);
+        if (req.saltEncLen == 64) CryptoP256::hmacSha256(credRandom, 32, salts + 32, 32, out + 32);
+        uint8_t outEnc[64];
+        CryptoP256::aes256CbcEncrypt(shared, NULL, out, req.saltEncLen, outEnc);
+        CborEncoder ext(extCbor, *extLen);
+        ext.encodeMapHeader(1);
+        ext.encodeText("hmac-secret");
+        ext.encodeBytes(outEnc, req.saltEncLen);
+        *extLen = ext.getLength();
+        mbedtls_platform_zeroize(outEnc, sizeof(outEnc));
+        ok = true;
+    }
+    mbedtls_platform_zeroize(shared, sizeof(shared));
+    mbedtls_platform_zeroize(salts, sizeof(salts));
+    mbedtls_platform_zeroize(out, sizeof(out));
+    mbedtls_platform_zeroize(credRandom, sizeof(credRandom));
+    return ok;
+}
+
 void Ctap2Engine::sendAssertion(uint32_t cid, const char* rpId, const uint8_t* clientDataHash,
                                 const uint8_t* credId, const ResidentCred* rk, uint8_t flags,
-                                bool withUserDetails, uint8_t numberOfCredentials) {
+                                bool withUserDetails, uint8_t numberOfCredentials,
+                                const HmacSecretReq* hmac) {
+    uint8_t ext[96];
+    size_t extLen = 0;
+    if (hmac && hmac->present) {
+        extLen = sizeof(ext);
+        if (!hmacSecretOutput(credId, *hmac, ext, &extLen)) return sendStatus(cid, CTAP2_ERR_INVALID_PARAM);
+        flags |= AUTHDATA_FLAG_ED;
+    }
+
     uint8_t privKey[32];
     if (!cryptoP256.verifyCredentialId(rpId, credId, privKey)) {
         mbedtls_platform_zeroize(privKey, sizeof(privKey));
         return sendStatus(cid, CTAP2_ERR_NO_CREDENTIALS);
     }
 
-    uint8_t authData[37];
+    uint8_t authData[37 + sizeof(ext)];
+    size_t adLen = 37 + extLen;
     CryptoP256::sha256((const uint8_t*)rpId, strlen(rpId), authData);
     authData[32] = flags;
     uint32_t counter = cryptoP256.incrementSignatureCounter();
@@ -516,12 +583,13 @@ void Ctap2Engine::sendAssertion(uint32_t cid, const char* rpId, const uint8_t* c
     authData[34] = (uint8_t)(counter >> 16);
     authData[35] = (uint8_t)(counter >> 8);
     authData[36] = (uint8_t)counter;
+    memcpy(authData + 37, ext, extLen);
 
-    uint8_t signInput[37 + 32];
-    memcpy(signInput, authData, 37);
-    memcpy(signInput + 37, clientDataHash, 32);
+    uint8_t signInput[sizeof(authData) + 32];
+    memcpy(signInput, authData, adLen);
+    memcpy(signInput + adLen, clientDataHash, 32);
     uint8_t digest[32];
-    CryptoP256::sha256(signInput, sizeof(signInput), digest);
+    CryptoP256::sha256(signInput, adLen + 32, digest);
 
     uint8_t sigDer[80];
     size_t sigLen = sizeof(sigDer);
@@ -543,7 +611,7 @@ void Ctap2Engine::sendAssertion(uint32_t cid, const char* rpId, const uint8_t* c
     enc.encodeText("public-key");
 
     enc.encodeUnsigned(0x02);
-    enc.encodeBytes(authData, sizeof(authData));
+    enc.encodeBytes(authData, adLen);
     enc.encodeUnsigned(0x03);
     enc.encodeBytes(sigDer, sigLen);
 
@@ -586,6 +654,8 @@ void Ctap2Engine::handleGetAssertion(uint32_t cid, CborDecoder& dec) {
     size_t pinAuthLen = 0;
     bool havePinAuth = false;
     uint64_t pinProtocol = 0;
+    HmacSecretReq hmacReq;
+    memset(&hmacReq, 0, sizeof(hmacReq));
 
     for (size_t i = 0; i < mapCount; i++) {
         uint64_t key = 0;
@@ -595,6 +665,50 @@ void Ctap2Engine::handleGetAssertion(uint32_t cid, CborDecoder& dec) {
             case 0x01: ok = dec.readText(rpId, sizeof(rpId)); break;
             case 0x02: ok = dec.readBytes(&clientDataHash, &clientDataHashLen); break;
             case 0x03: ok = parseCredList(dec, allow, &allowCount, &allowTotal); break;
+            case 0x04: {  // extensions {"hmac-secret": {1: keyAgreement, 2: saltEnc, 3: saltAuth}}
+                size_t m = 0;
+                ok = dec.readMapHeader(&m);
+                for (size_t e = 0; ok && e < m; e++) {
+                    char k[24] = {0};
+                    if (!readTextKey(dec, k, sizeof(k))) continue;
+                    if (strcmp(k, "hmac-secret") != 0) { ok = dec.skipValue(); continue; }
+                    size_t hm = 0;
+                    if (!(ok = dec.readMapHeader(&hm))) break;
+                    bool haveX = false, haveY = false;
+                    for (size_t h = 0; ok && h < hm; h++) {
+                        uint64_t hk = 0;
+                        if (!(ok = dec.readUnsigned(&hk))) break;
+                        if (hk == 1) {  // COSE_Key
+                            size_t cm = 0;
+                            if (!(ok = dec.readMapHeader(&cm))) break;
+                            for (size_t c = 0; ok && c < cm; c++) {
+                                int64_t ck = 0;
+                                if (!(ok = dec.readInt(&ck))) break;
+                                if (ck == -2 || ck == -3) {
+                                    const uint8_t* p = nullptr;
+                                    size_t len = 0;
+                                    if (!(ok = dec.readBytes(&p, &len))) break;
+                                    if (len == 32) {
+                                        memcpy(hmacReq.platformKey + (ck == -2 ? 0 : 32), p, 32);
+                                        (ck == -2 ? haveX : haveY) = true;
+                                    }
+                                } else {
+                                    ok = dec.skipValue();
+                                }
+                            }
+                        } else if (hk == 2) {
+                            ok = dec.readBytes(&hmacReq.saltEnc, &hmacReq.saltEncLen);
+                        } else if (hk == 3) {
+                            ok = dec.readBytes(&hmacReq.saltAuth, &hmacReq.saltAuthLen);
+                        } else {
+                            ok = dec.skipValue();
+                        }
+                    }
+                    hmacReq.present = haveX && haveY && hmacReq.saltEnc && hmacReq.saltAuth;
+                    if (!hmacReq.present) return sendStatus(cid, CTAP2_ERR_MISSING_PARAMETER);
+                }
+                break;
+            }
             case 0x05: ok = parseOptions(dec, opts); break;
             case 0x06: ok = havePinAuth = dec.readBytes(&pinAuth, &pinAuthLen); break;
             case 0x07: ok = dec.readUnsigned(&pinProtocol); break;
@@ -652,7 +766,8 @@ void Ctap2Engine::handleGetAssertion(uint32_t cid, CborDecoder& dec) {
     uint8_t flags = (up ? AUTHDATA_FLAG_UP : 0) | (uvVerified ? AUTHDATA_FLAG_UV : 0);
 
     bool multiple = found > 1;
-    sendAssertion(cid, rpId, clientDataHash, credId, rk, flags, multiple && uvVerified, multiple ? found : 0);
+    sendAssertion(cid, rpId, clientDataHash, credId, rk, flags, multiple && uvVerified, multiple ? found : 0,
+                  &hmacReq);
 
     if (multiple) {
         _pending.active = true;

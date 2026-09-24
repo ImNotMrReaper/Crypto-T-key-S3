@@ -45,6 +45,15 @@ bool CryptoP256::loadOrGenerateMasterSecret() {
     return true;
 }
 
+void CryptoP256::deriveCredRandom(const uint8_t* credId, size_t credIdLen, uint8_t out32[32]) {
+    uint8_t buf[11 + 64];
+    size_t n = credIdLen > 64 ? 64 : credIdLen;
+    memcpy(buf, "hmac-secret", 11);
+    memcpy(buf + 11, credId, n);
+    hmacSha256(_masterSecret, 32, buf, 11 + n, out32);
+    mbedtls_platform_zeroize(buf, sizeof(buf));
+}
+
 bool CryptoP256::rotateMasterSecret() {
     getRandomBytes(_masterSecret, sizeof(_masterSecret));
     Preferences prefs;
