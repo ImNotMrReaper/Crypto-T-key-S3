@@ -21,61 +21,25 @@ import urllib.request
 import urllib.error
 import serial
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import balances  # noqa: E402  (tools/balances.py)
+
 try:
     import websocket
     HAS_WEBSOCKET = True
 except ImportError:
     HAS_WEBSOCKET = False
 
-# ─── CoinGecko ID Map (full 44-coin registry) ─────────────────────────────────
-COINGECKO_MAP = {
-    # ── CRYPTO ────────────────────────────────────────────────────────────────
-    "BTC":    "bitcoin",
-    "ETH":    "ethereum",
-    "SOL":    "solana",
-    "BNB":    "binancecoin",
-    "XRP":    "ripple",
-    "ADA":    "cardano",
-    "AVAX":   "avalanche-2",
-    "DOT":    "polkadot",
-    "LINK":   "chainlink",
-    "LTC":    "litecoin",
-    "BCH":    "bitcoin-cash",
-    "ATOM":   "cosmos",
-    "POL":    "matic-network",
-    "TRX":    "tron",
-    "NEAR":   "near",
-    "SUI":    "sui",
-    "APT":    "aptos",
-    "TON":    "the-open-network",
-    "XLM":   "stellar",
-    "ALGO":   "algorand",
-    "HBAR":   "hedera-hashgraph",
-    "VET":    "vechain",
-    "FIL":    "filecoin",
-    "ICP":    "internet-computer",
-    "TAO":    "bittensor",
-    "INJ":    "injective-protocol",
-    "ARB":    "arbitrum",
-    "OP":     "optimism",
-    "KAS":    "kaspa",
-    "XMR":    "monero",
-    "EGLD":   "elrond-erd-2",
-    "UNI":    "uniswap",
-    # ── MEME COINS ────────────────────────────────────────────────────────────
-    "DOGE":   "dogecoin",
-    "SHIB":   "shiba-inu",
-    "PEPE":   "pepe",
-    "BONK":   "bonk",
-    "FLOKI":  "floki",
-    "WIF":    "dogwifcoin",
-    "BRETT":  "based-brett",
-    "MOG":    "mog-coin",
-    "TURBO":  "turbo",
-    "POPCAT": "popcat",
-    "NEIRO":  "neiro-ethereum",
-    "GOAT":   "goatseus-maximus",
-}
+# ─── CoinGecko ids: the same curated catalog the firmware is built from ──────────
+def _load_catalog_ids():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "coin_catalog.json")
+    with open(path) as f:
+        cat = json.load(f)
+    coins = cat["coins"] if isinstance(cat, dict) else cat
+    return {c["symbol"]: c["cg"] for c in coins}
+
+
+COINGECKO_MAP = _load_catalog_ids()
 
 # ─── Kraken WebSocket v2 subscription pairs ───────────────────────────────────
 # Maps Kraken instrument names -> our symbol
@@ -250,138 +214,40 @@ def fetch_kraken_rest():
 
 
 # ─── On-Chain Balance Fetchers ────────────────────────────────────────────────
-def fetch_btc_balance(address):
-    if not address or len(address) < 20 or not address.startswith("bc1"):
-        return 0.0
-    url = f"https://mempool.space/api/address/{address}"
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=8) as res:
-            data  = json.loads(res.read().decode())
-            chain = data.get("chain_stats", {})
-            sats  = chain.get("funded_txo_sum", 0) - chain.get("spent_txo_sum", 0)
-            return max(0.0, sats / 100_000_000.0)
-    except Exception as e:
-        print(f"[TRACKER] Mempool BTC error ({address}): {e}", file=sys.stderr)
-        return 0.0
-
-
-def fetch_eth_balance(address):
-    if not address or not address.startswith("0x") or len(address) != 42:
-        return 0.0
-    url     = "https://ethereum-rpc.publicnode.com"
-    payload = json.dumps({"jsonrpc": "2.0", "method": "eth_getBalance",
-                          "params": [address, "latest"], "id": 1}).encode()
-    req = urllib.request.Request(url, data=payload,
-                                 headers={"Content-Type": "application/json",
-                                          "User-Agent": "Mozilla/5.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=8) as res:
-            data = json.loads(res.read().decode())
-            return int(data.get("result", "0x0"), 16) / 1e18
-    except Exception as e:
-        print(f"[TRACKER] ETH RPC error: {e}", file=sys.stderr)
-        return 0.0
-
-
-def fetch_pepe_balance(address):
-    if not address or not address.startswith("0x") or len(address) != 42:
-        return 0.0
-    pepe_contract = "0x6982508145454Ce325dDbE47a25d4ec3d2311933"
-    clean_addr    = address[2:].lower().zfill(64)
-    data          = "0x70a08231" + clean_addr
-    url           = "https://ethereum-rpc.publicnode.com"
-    payload       = json.dumps({"jsonrpc": "2.0", "method": "eth_call",
-                                "params": [{"to": pepe_contract, "data": data}, "latest"],
-                                "id": 2}).encode()
-    req = urllib.request.Request(url, data=payload,
-                                 headers={"Content-Type": "application/json",
-                                          "User-Agent": "Mozilla/5.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=8) as res:
-            resp    = json.loads(res.read().decode())
-            hex_val = resp.get("result", "0x0")
-            return int(hex_val, 16) / 1e18
-    except Exception as e:
-        print(f"[TRACKER] PEPE balance error: {e}", file=sys.stderr)
-        return 0.0
-
-
-def fetch_sol_balance(address):
-    if not address or len(address) < 32:
-        return 0.0
-    url     = "https://api.mainnet-beta.solana.com"
-    payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "getBalance",
-                          "params": [address]}).encode()
-    req = urllib.request.Request(url, data=payload,
-                                 headers={"Content-Type": "application/json",
-                                          "User-Agent": "Mozilla/5.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=8) as res:
-            data     = json.loads(res.read().decode())
-            lamports = data.get("result", {}).get("value", 0)
-            return lamports / 1e9
-    except Exception as e:
-        print(f"[TRACKER] Solana RPC error: {e}", file=sys.stderr)
-        return 0.0
-
-
-def fetch_doge_balance(address):
-    if not address or not address.startswith("D") or len(address) < 26:
-        return 0.0
-    url = f"https://api.blockcypher.com/v1/doge/main/addrs/{address}/balance"
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=8) as res:
-            data = json.loads(res.read().decode())
-            return data.get("final_balance", 0) / 1e8
-    except Exception as e:
-        print(f"[TRACKER] DOGE balance error: {e}", file=sys.stderr)
-        return 0.0
-
 
 def query_device_addresses(ser):
-    """Public receive addresses via the machine-readable `addrs` command
-    ("ADDR <SYM> <address>" ... "ADDR END"); works while the vault is locked."""
-    addresses = {}
+    """Selected coins and their public receive addresses via the device's `addrs` command:
+    'ADDR <SYM> <address> <family> <network>|<contract>' ... 'ADDR END' (works while locked)."""
     try:
         with _serial_lock:
             ser.reset_input_buffer()
             ser.write(b"addrs\n")
-        deadline = time.time() + 2.0
+        deadline = time.time() + 3.0
         buf = ""
         while time.time() < deadline and "ADDR END" not in buf:
             buf += ser.read(ser.in_waiting or 1).decode(errors="ignore")
-        for line in buf.splitlines():
-            parts = line.strip().split()
-            if len(parts) == 3 and parts[0] == "ADDR":
-                addresses[parts[1].upper()] = parts[2]
+        return balances.parse_addrs(buf)
     except Exception as e:
         print(f"[TRACKER] Address query error: {e}", file=sys.stderr)
-    return addresses
+        return []
 
 
-BALANCE_FETCHERS = [
-    # (device address key, balance symbol, fetcher, decimals)
-    ("BTC", "BTC", lambda a: fetch_btc_balance(a), 8),
-    ("ETH", "ETH", lambda a: fetch_eth_balance(a), 6),
-    ("ETH", "PEPE", lambda a: fetch_pepe_balance(a), 2),
-    ("SOL", "SOL", lambda a: fetch_sol_balance(a), 6),
-    ("DOGE", "DOGE", lambda a: fetch_doge_balance(a), 4),
-]
+def _fmt_balance(v):
+    # enough digits for BTC dust and meme-coin millions alike
+    return f"{v:.8f}" if v < 1e6 else f"{v:.2f}"
 
 
 def refresh_balances(ser):
-    addrs = query_device_addresses(ser)
-    if not addrs:
+    entries = query_device_addresses(ser)
+    if not entries:
         print("[TRACKER] No wallet addresses on device yet (create a wallet to track balances)")
         return
-    for key, sym, fetch, dec in BALANCE_FETCHERS:
-        if key in addrs:
-            bal = fetch(addrs[key]) or 0.0
-            _safe_serial_write(f"setbal {sym} {bal:.{dec}f}\n")
-            time.sleep(0.05)
-    print(f"[TRACKER] Balances refreshed for {sorted(addrs)}")
+    got = balances.refresh_all(entries)
+    for sym, bal in got.items():
+        _safe_serial_write(f"setbal {sym} {_fmt_balance(bal)}\n")
+        time.sleep(0.05)
+    skipped = sorted({e[0] for e in entries} - set(got))
+    print(f"[TRACKER] Balances refreshed for {sorted(got)}" + (f"; skipped (lookup failed) {skipped}" if skipped else ""))
 
 
 # ─── Main Sync Cycle ──────────────────────────────────────────────────────────

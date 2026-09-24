@@ -249,6 +249,7 @@ bool CryptoWallet::setMnemonic(const char* phrase) {
         return false;
     }
     _hasSeed = true;
+    publishAddresses();   // derive* ran before _hasSeed was set: publish again or a first wallet shows no addresses
     _isUnlocked = true;
     if (!wasUnlocked) lock();  // keys only stay in RAM while the vault is unlocked
     return true;
