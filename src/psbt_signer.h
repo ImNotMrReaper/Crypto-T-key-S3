@@ -15,15 +15,21 @@
 #include "config.h"
 #include "crypto_wallet.h"
 
+#include "psbt_core.h"
+
+// Everything the approval screens show, straight from PsbtCore::analyze()
 struct PsbtTxDetails {
     char fileName[64];
-    char recipientAddr[64];
+    PsbtCore::Result r;      // every non-change output, change total, exact fee, input counts
+    PsbtCore::Error error;
+    bool isValid;
+    // Legacy summary fields (serial `psbt parse`): the first external output
+    char recipientAddr[PsbtCore::MAX_ADDRESS_LEN];
     uint64_t sendSatoshis;
     uint64_t feeSatoshis;
     uint64_t changeSatoshis;
     uint32_t numInputs;
     uint32_t numOutputs;
-    bool isValid;
     bool isSigned;
 };
 
@@ -45,18 +51,11 @@ public:
     // Helper: format satoshis to human BTC string e.g. "0.04500000 BTC"
     static void formatSatoshis(uint64_t sats, char* outBuf, size_t maxLen);
 
-    // Low-S normalization for secp256k1 ECDSA (BIP-62 / BIP-146)
-    static void normalizeLowS(uint8_t s[32]);
-
-    // DER signature encoder
-    static size_t encodeDer(const uint8_t r[32], const uint8_t s[32], uint8_t* outDer);
-
 private:
     static bool _mounted;
-    static uint64_t readVarInt(const uint8_t* buf, size_t maxLen, size_t& offset);
-    static uint64_t readVarIntRaw(const uint8_t* buf, size_t maxLen, size_t& offset);
-    static void writeVarInt(uint64_t val, uint8_t* out, size_t& offset);
-    static void doubleSha256(const uint8_t* data, size_t len, uint8_t out[32]);
+    // Reads a PSBT file (binary or base64) into a malloc'd buffer the caller frees
+    static uint8_t* loadPsbt(const char* filePath, size_t* len, bool* wasBase64);
+    static bool fillOptions(const CryptoWallet& wallet, PsbtCore::Options* opt);
     static bool decodeBase64(const char* in, size_t inLen, uint8_t* out, size_t& outLen, size_t maxOut);
     static bool encodeBase64(const uint8_t* in, size_t inLen, char* out, size_t maxOut);
 };

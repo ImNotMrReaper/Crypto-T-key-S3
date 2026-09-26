@@ -14,6 +14,8 @@
 
 #include <Arduino.h>
 
+#define EVM_MAX_TX_BYTES 4096   // largest unsigned transaction accepted for review
+
 enum EvmTxType {
     EVM_TX_LEGACY = 0,
     EVM_TX_EIP1559 = 2,
@@ -78,6 +80,4 @@ public:
     static void formatTokenValue(const uint8_t* valBytes, size_t valLen, uint8_t decimals, 
                                  const char* symbol, char* outStr, size_t maxLen);
 
-private:
-    static bool isPepeContract(const uint8_t* addr20);
 };

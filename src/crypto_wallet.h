@@ -78,6 +78,12 @@ public:
     // Memory Security
     static void secureZero(void* ptr, size_t len);
 
+    // Bitcoin PSBT signing (psbt_core callbacks). Only while unlocked; private keys stay here.
+    bool btcMasterFingerprint(uint8_t fp[4]) const;
+    bool btcDerivePubkey(const uint32_t* path, size_t depth, uint8_t pub33[33]) const;
+    bool btcSignDigest(const uint32_t* path, size_t depth, const uint8_t digest[32],
+                       uint8_t* der, size_t derCapacity, size_t* derLength) const;
+
 private:
     void deriveAllAccounts();
     void publishAddresses();

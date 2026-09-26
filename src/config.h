@@ -34,7 +34,7 @@
 // ─── Thermal & Power Management ──────────────────────────────────────────────
 #define CPU_FREQ_MHZ              80      // 80MHz dynamic throttling (cool operation)
 #define DISPLAY_SLEEP_TIMEOUT_MS  45000   // 45 seconds inactivity sleep timer
-#define LED_BRIGHTNESS_LIMIT      35      // Scaled brightness (prevents LED heat)
+#define LED_BRIGHTNESS_LIMIT      16      // APA102 5-bit global brightness cap (0..31): about half power, cool in the enclosed dongle
 
 // ─── Button Cadence Timings (ms) ─────────────────────────────────────────────
 #define BTN_DEBOUNCE_MS        35
@@ -74,7 +74,8 @@ enum DeviceState {
     STATE_CRYPTO_SIGN_PROMPT,  // Clear-signing transaction verification (WYSIWYS)
     STATE_AIRGAP_SD_SIGN,      // MicroSD PSBT air-gap signer
     STATE_RECEIVE_QR,          // Receive address + QR code (public, no PIN)
-    STATE_DURESS_WIPED         // Decoy system crash after zeroization
+    STATE_DURESS_WIPED,        // Decoy system crash after zeroization
+    STATE_PANIC_COUNTDOWN      // Panic hold accepted: cancellable countdown before the emergency action
 };
 
 // ─── Button Events ───────────────────────────────────────────────────────────

@@ -1,0 +1,17 @@
+--- /usr/local/bin/soulstone-storage
++++ /usr/local/bin/soulstone-storage
+@@ -212,8 +212,14 @@
+         else
+             log "Checking for encrypted Soul Stone volume..."
+-            if [ -b "/dev/disk/by-uuid/$LUKS_UUID" ] && [ -f "/etc/soulstone/soulstone.key" ]; then
++            # 1. Try FIDO2 Token Hardware Unlock (Crypto TKey S3) if enrolled
++            if [ -b "/dev/disk/by-uuid/$LUKS_UUID" ] && command -v systemd-cryptsetup >/dev/null 2>&1; then
++                systemd-cryptsetup attach soulstone_crypt "/dev/disk/by-uuid/$LUKS_UUID" - fido2-device=auto 2>/dev/null || true
++            fi
++            # 2. Fallback to local machine keyfile
++            if [ ! -b "/dev/mapper/soulstone_crypt" ] && [ -b "/dev/disk/by-uuid/$LUKS_UUID" ] && [ -f "/etc/soulstone/soulstone.key" ]; then
+                 cryptsetup open --key-file=/etc/soulstone/soulstone.key "/dev/disk/by-uuid/$LUKS_UUID" soulstone_crypt 2>/dev/null || true
++            fi
+             if [ -b "/dev/mapper/soulstone_crypt" ]; then
+                 mount -t btrfs -o "$BTRFS_MOUNT_OPTS" "/dev/mapper/soulstone_crypt" "$SD_MOUNT"
+                 mount --make-rprivate "$SD_MOUNT"

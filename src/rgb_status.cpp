@@ -31,6 +31,9 @@ void RgbStatus::writeByte(uint8_t byte) {
 }
 
 void RgbStatus::sendFrame(uint8_t r, uint8_t g, uint8_t b, uint8_t brightness) {
+    if (brightness > BRIGHTNESS_CAP) {
+        brightness = BRIGHTNESS_CAP;
+    }
     lastR = r; lastG = g; lastB = b; lastBrightness = brightness;
     // 1. Start frame: 32 zero bits
     for (uint8_t i = 0; i < 4; i++) {
@@ -167,6 +170,7 @@ void RgbStatus::update() {
         }
     }
 
+    homeTheme.checkPreviewTimeout(now);
     if (now - _lastUpdate < 20) return; // 50 Hz smooth refresh
     _lastUpdate = now;
 
@@ -227,7 +231,7 @@ void RgbStatus::update() {
             uint8_t r = (uint8_t)(_coinR * scale);
             uint8_t g = (uint8_t)(_coinG * scale);
             uint8_t b = (uint8_t)(_coinB * scale);
-            setPixel(r, g, b, 4);
+            setPixel(r, g, b, homeTheme.mapBrightness(BRIGHTNESS_CAP));
             break;
         }
 
@@ -321,26 +325,15 @@ void RgbStatus::emit(uint8_t r, uint8_t g, uint8_t b, float level) {
     uint8_t mx = max(r, max(g, b));
     if (mx == 0) { setPixel(0, 0, 0, 0); return; }
     float k = (255.0f / mx) * level * level;
-    setPixel((uint8_t)(r * k), (uint8_t)(g * k), (uint8_t)(b * k), 4);
+    uint8_t bright = homeTheme.mapBrightness(BRIGHTNESS_CAP);
+    setPixel((uint8_t)(r * k), (uint8_t)(g * k), (uint8_t)(b * k), bright);
 }
 
 void RgbStatus::renderHome(uint32_t now) {
-    switch (homeTheme.fx) {
-        case HOME_FX_SOLID:
-            emit(homeTheme.r, homeTheme.g, homeTheme.b, 0.8f);
-            break;
-        case HOME_FX_RAINBOW: {
-            RgbColor c = wheel((uint8_t)(now / 24));
-            emit(c.r, c.g, c.b, 0.8f);
-            break;
-        }
-        case HOME_FX_BREATHE:
-        default: {
-            float s = 0.5f - 0.5f * cosf((now % 4000) * (2 * PI / 4000.0f));
-            emit(homeTheme.r, homeTheme.g, homeTheme.b, 0.25f + 0.75f * s);
-            break;
-        }
-    }
+    uint8_t r, g, b;
+    float level;
+    homeTheme.currentFrame(now, r, g, b, level);
+    emit(r, g, b, level);
 }
 
 void RgbStatus::setCoin(const char* symbol) {

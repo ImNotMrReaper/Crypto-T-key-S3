@@ -123,13 +123,18 @@ void CryptoWallet::lock() {
     }
     secureZero(_masterSeed, sizeof(_masterSeed));
     secureZero(_mnemonic, sizeof(_mnemonic));
+    SeedGenerator::wipe();
 }
 
 bool CryptoWallet::storeSeed() {
-    uint8_t key[32];
-    if (!walletDeviceKey(key)) return false;
+    uint8_t key[32] = {0};
+    uint8_t blob[12 + sizeof(_mnemonic) + 16] = {0};
+    if (!walletDeviceKey(key)) {
+        mbedtls_platform_zeroize(key, sizeof(key));
+        mbedtls_platform_zeroize(blob, sizeof(blob));
+        return false;
+    }
     size_t n = strlen(_mnemonic);
-    uint8_t blob[12 + sizeof(_mnemonic) + 16];
     CryptoP256::secureRandom(blob, 12);
     mbedtls_gcm_context gcm;
     mbedtls_gcm_init(&gcm);
@@ -140,8 +145,12 @@ bool CryptoWallet::storeSeed() {
                                        (const uint8_t*)_mnemonic, blob + 12, 16, blob + 12 + n);
     }
     mbedtls_gcm_free(&gcm);
+    mbedtls_platform_zeroize(&gcm, sizeof(gcm));
     mbedtls_platform_zeroize(key, sizeof(key));
-    if (rc != 0) return false;
+    if (rc != 0) {
+        mbedtls_platform_zeroize(blob, sizeof(blob));
+        return false;
+    }
 
     Preferences prefs;
     prefs.begin("wallet_seed", false);
@@ -153,16 +162,27 @@ bool CryptoWallet::storeSeed() {
 }
 
 bool CryptoWallet::loadSeed() {
-    uint8_t blob[12 + sizeof(_mnemonic) + 16];
+    uint8_t blob[12 + sizeof(_mnemonic) + 16] = {0};
     Preferences prefs;
     prefs.begin("wallet_seed", true);
     size_t len = prefs.getBytesLength("seed");
     bool ok = len > 28 && len <= sizeof(blob) && prefs.getBytes("seed", blob, len) == len;
     prefs.end();
-    uint8_t key[32];
-    if (!ok || !walletDeviceKey(key)) return false;
+    uint8_t key[32] = {0};
+    if (!ok || !walletDeviceKey(key)) {
+        mbedtls_platform_zeroize(key, sizeof(key));
+        mbedtls_platform_zeroize(blob, sizeof(blob));
+        secureZero(_mnemonic, sizeof(_mnemonic));
+        return false;
+    }
 
     size_t n = len - 28;
+    if (n >= sizeof(_mnemonic)) {
+        mbedtls_platform_zeroize(key, sizeof(key));
+        mbedtls_platform_zeroize(blob, sizeof(blob));
+        secureZero(_mnemonic, sizeof(_mnemonic));
+        return false;
+    }
     mbedtls_gcm_context gcm;
     mbedtls_gcm_init(&gcm);
     int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256);
@@ -171,6 +191,7 @@ bool CryptoWallet::loadSeed() {
                                       blob + 12 + n, 16, blob + 12, (uint8_t*)_mnemonic);
     }
     mbedtls_gcm_free(&gcm);
+    mbedtls_platform_zeroize(&gcm, sizeof(gcm));
     mbedtls_platform_zeroize(key, sizeof(key));
     mbedtls_platform_zeroize(blob, sizeof(blob));
     if (rc != 0) {
@@ -189,14 +210,24 @@ bool CryptoWallet::isValidMnemonic(const char* phrase) {
     char buf[240];
     strncpy(buf, phrase, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
+    bool wordsValid = true;
     for (char* w = strtok(buf, " "); w; w = strtok(nullptr, " ")) {
-        if (count >= 24) return false;
+        if (count >= 24) {
+            wordsValid = false;
+            break;
+        }
         uint16_t i = SeedGenerator::getWordIndex(w);
-        if (i == 0 && strcmp(w, "abandon") != 0) return false;  // index 0 doubles as "not found"
+        if (i == 0 && strcmp(w, "abandon") != 0) {  // index 0 doubles as "not found"
+            wordsValid = false;
+            break;
+        }
         idx[count++] = i;
     }
-    secureZero(buf, sizeof(buf));
-    if (count != 12 && count != 24) return false;
+    if (!wordsValid || (count != 12 && count != 24)) {
+        secureZero(buf, sizeof(buf));
+        secureZero(idx, sizeof(idx));
+        return false;
+    }
 
     // 11 bits per word = entropy || checksum (entropy bits / 32)
     uint8_t bits[33] = {0};
@@ -210,13 +241,18 @@ bool CryptoWallet::isValidMnemonic(const char* phrase) {
     }
     int entBytes = count == 12 ? 16 : 32;
     int csBits = entBytes / 4;
-    uint8_t hash[32];
-    mbedtls_sha256(bits, entBytes, hash, 0);
+    uint8_t hash[32] = {0};
+    int shaRc = mbedtls_sha256(bits, entBytes, hash, 0);
     uint8_t expected = hash[0] >> (8 - csBits);
     uint8_t actual = bits[entBytes] >> (8 - csBits);
+    bool valid = shaRc == 0 && expected == actual;
     secureZero(bits, sizeof(bits));
     secureZero(idx, sizeof(idx));
-    return expected == actual;
+    secureZero(buf, sizeof(buf));
+    secureZero(hash, sizeof(hash));
+    secureZero(&expected, sizeof(expected));
+    secureZero(&actual, sizeof(actual));
+    return valid;
 }
 
 const char* CryptoWallet::getMnemonicPhrase() const {
@@ -282,6 +318,12 @@ const char* CryptoWallet::getCoinName(CryptoCoin coin) const {
 
 // ─── Deterministic Key & Address Derivation ──────────────────────────────────
 void CryptoWallet::deriveAllAccounts() {
+    // Failed derivations must not leave a previous wallet's private keys active.
+    for (int i = 0; i < COIN_COUNT; i++) {
+        mbedtls_platform_zeroize(_accounts[i].privKey, sizeof(_accounts[i].privKey));
+    }
+    mbedtls_platform_zeroize(_masterSeed, sizeof(_masterSeed));
+
     // 1. Compute standard 64-byte BIP-39 binary seed from mnemonic
     Bip32Engine::mnemonicToSeed(_mnemonic, "", _masterSeed);
 
@@ -375,26 +417,83 @@ void CryptoWallet::deriveSolAddress(WalletAccount& acc) {
 }
 
 void CryptoWallet::deriveDogeAddress(WalletAccount& acc) {
-    Bip32Node master;
-    if (!Bip32Engine::initMasterNode(_masterSeed, &master)) return;
+    mbedtls_platform_zeroize(acc.privKey, sizeof(acc.privKey));
+    Bip32Node master = {};
+    Bip32Node child = {};
+    uint8_t shaOut[32] = {0};
+    uint8_t hash160[20] = {0};
+    uint8_t payload[25] = {0};
+    uint8_t sha1[32] = {0};
+    uint8_t sha2[32] = {0};
     const uint32_t path[5] = { 44 | 0x80000000, 3 | 0x80000000, 0 | 0x80000000, 0, 0 };
-    Bip32Node child;
-    if (Bip32Engine::derivePath(&master, path, 5, &child)) {
+    if (Bip32Engine::initMasterNode(_masterSeed, &master) &&
+        Bip32Engine::derivePath(&master, path, 5, &child)) {
         memcpy(acc.privKey, child.privKey, 32);
         memcpy(acc.pubKey, child.pubKeyCompressed, 33);
-        uint8_t shaOut[32];
         mbedtls_sha256(child.pubKeyCompressed, 33, shaOut, 0);
-        uint8_t hash160[20];
         mbedtls_ripemd160(shaOut, 32, hash160);
-        uint8_t payload[25];
         payload[0] = 0x1E; // Doge version byte
         memcpy(payload + 1, hash160, 20);
-        uint8_t sha1[32], sha2[32];
         mbedtls_sha256(payload, 21, sha1, 0);
         mbedtls_sha256(sha1, 32, sha2, 0);
         memcpy(payload + 21, sha2, 4);
         Bip32Engine::base58Encode(payload, 25, acc.address, sizeof(acc.address));
     }
+    mbedtls_platform_zeroize(&master, sizeof(master));
+    mbedtls_platform_zeroize(&child, sizeof(child));
+    mbedtls_platform_zeroize(shaOut, sizeof(shaOut));
+    mbedtls_platform_zeroize(hash160, sizeof(hash160));
+    mbedtls_platform_zeroize(payload, sizeof(payload));
+    mbedtls_platform_zeroize(sha1, sizeof(sha1));
+    mbedtls_platform_zeroize(sha2, sizeof(sha2));
+}
+
+#include "psbt_core.h"
+
+// BIP-32 node at `path` (depth 0 = the master node itself)
+static bool deriveNode(const uint8_t seed[64], const uint32_t* path, size_t depth, Bip32Node* out) {
+    Bip32Node master;
+    bool ok = Bip32Engine::initMasterNode(seed, &master);
+    if (ok && depth == 0) memcpy(out, &master, sizeof(master));
+    else if (ok) ok = Bip32Engine::derivePath(&master, path, depth, out);
+    mbedtls_platform_zeroize(&master, sizeof(master));
+    return ok;
+}
+
+bool CryptoWallet::btcMasterFingerprint(uint8_t fp[4]) const {
+    if (!_isUnlocked) return false;
+    Bip32Node master;
+    if (!deriveNode(_masterSeed, nullptr, 0, &master)) return false;
+    uint8_t sha[32], h160[20];
+    mbedtls_sha256(master.pubKeyCompressed, 33, sha, 0);
+    mbedtls_ripemd160(sha, 32, h160);
+    memcpy(fp, h160, 4);   // BIP-32 fingerprint: first 4 bytes of HASH160(master public key)
+    mbedtls_platform_zeroize(&master, sizeof(master));
+    return true;
+}
+
+bool CryptoWallet::btcDerivePubkey(const uint32_t* path, size_t depth, uint8_t pub33[33]) const {
+    if (!_isUnlocked || !path || depth == 0 || depth > 8) return false;
+    Bip32Node node;
+    bool ok = deriveNode(_masterSeed, path, depth, &node);
+    if (ok) memcpy(pub33, node.pubKeyCompressed, 33);
+    mbedtls_platform_zeroize(&node, sizeof(node));
+    return ok;
+}
+
+static int psbtBlindRng(void*, unsigned char* out, size_t len) {
+    CryptoP256::secureRandom(out, len);
+    return 0;
+}
+
+bool CryptoWallet::btcSignDigest(const uint32_t* path, size_t depth, const uint8_t digest[32],
+                                 uint8_t* der, size_t derCapacity, size_t* derLength) const {
+    if (!_isUnlocked || !path || depth == 0 || depth > 8) return false;
+    Bip32Node node;
+    bool ok = deriveNode(_masterSeed, path, depth, &node) &&
+              PsbtCore::signMbedTlsSecp256k1(node.privKey, digest, psbtBlindRng, nullptr, der, derCapacity, derLength);
+    mbedtls_platform_zeroize(&node, sizeof(node));
+    return ok;
 }
 
 #include "evm_decoder.h"
@@ -468,46 +567,13 @@ bool CryptoWallet::parseAndPrepareEvmHexTx(const char* hexStr, void* outDecoded)
 }
 
 bool CryptoWallet::executeSign(char* outSigHex, size_t maxLen) {
-    if (!_isUnlocked) return false;
-    CryptoCoin c = _currentTx.coin;
-
-    // Hash the transaction summary to sign
-    SHA256 sha;
-    sha.update((const uint8_t*)_currentTx.recipient, strlen(_currentTx.recipient));
-    sha.update((const uint8_t*)_currentTx.amount, strlen(_currentTx.amount));
-    uint8_t txHash[32];
-    sha.finalize(txHash, sizeof(txHash));
-
-    if (c == COIN_SOL) {
-        // Sign via Ed25519 (64-byte signature: R [32] || S [32])
-        uint8_t signature[64];
-        Ed25519::sign(signature, _accounts[c].privKey, _accounts[c].pubKey, txHash, sizeof(txHash));
-
-        if (outSigHex && maxLen >= 129) {
-            for (int i = 0; i < 64; i++) {
-                snprintf(outSigHex + (i * 2), maxLen - (i * 2), "%02x", signature[i]);
-            }
-            outSigHex[128] = '\0';
-        }
-        secureZero(signature, sizeof(signature));
-    } else {
-        // Sign via secp256k1 ECDSA (64-byte signature: r [32] || s [32])
-        uint8_t signature[64];
-        uECC_Curve curve = uECC_secp256k1();
-        uECC_sign(_accounts[c].privKey, txHash, sizeof(txHash), signature, curve);
-
-        if (outSigHex && maxLen >= 129) {
-            for (int i = 0; i < 64; i++) {
-                snprintf(outSigHex + (i * 2), maxLen - (i * 2), "%02x", signature[i]);
-            }
-            outSigHex[128] = '\0';
-        }
-        secureZero(signature, sizeof(signature));
-    }
-
-    _currentTx.verified = true;
-    secureZero(txHash, sizeof(txHash));
-    return true;
+    // Fail closed (audit W2): this used to sign SHA-256(recipient || amount) as display strings,
+    // which authorizes nothing on-chain and could be mistaken for a transaction signature.
+    // Real EIP-155 / EIP-1559 signing over the exact decoded bytes comes in Phase C2.
+    if (outSigHex && maxLen) outSigHex[0] = '\0';
+    _currentTx.verified = false;
+    Serial.println("[WALLET] Transaction signing for this chain isn't implemented yet; nothing was signed.");
+    return false;
 }
 
 void CryptoWallet::cancelSign() {

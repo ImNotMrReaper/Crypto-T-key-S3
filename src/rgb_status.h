@@ -11,6 +11,7 @@
 #include <Arduino.h>
 #include "config.h"
 #include "coin_catalog.h"
+#include "ui_theme.h"
 
 enum LedMode {
     LED_MODE_OFF,
@@ -38,6 +39,9 @@ struct RgbColor {
 
 class RgbStatus {
 public:
+    static constexpr uint8_t APA102_MAX_BRIGHTNESS = 31;
+    static constexpr uint8_t BRIGHTNESS_CAP = (LED_BRIGHTNESS_LIMIT <= APA102_MAX_BRIGHTNESS) ? (uint8_t)LED_BRIGHTNESS_LIMIT : APA102_MAX_BRIGHTNESS;
+
     void begin(uint8_t pinData = PIN_LED_DATA, uint8_t pinClk = PIN_LED_CLK);
     void setMode(LedMode mode);
     void update();

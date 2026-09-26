@@ -21,14 +21,11 @@
 #include <nvs.h>
 #include "USB.h"
 #include <WiFi.h>
-#include "soc/soc.h"
-#include "soc/rtc_cntl_reg.h"
-#include "esp_private/brownout.h"
+// Before the first function: the Arduino builder inserts generated prototypes there
+#include "src/emergency_policy.h"
 
-__attribute__((constructor(101))) void pre_init_early() {
-    esp_brownout_disable();
-    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
-}
+// The brownout detector stays ON (audit S5): with it disabled, a voltage sag during an NVS write
+// (unplugging mid-save) keeps the CPU running out of spec and can corrupt the keystore.
 
 #include "src/config.h"
 #include "src/power_mgr.h"
@@ -51,6 +48,7 @@ __attribute__((constructor(101))) void pre_init_early() {
 #include "src/ui_theme.h"
 #include "src/wallet_families.h"
 #include "src/bip32_engine.h"
+#include "src/device_clock.h"
 #include <mbedtls/platform_util.h>
 
 // ─── Subsystem Allocations (Dynamic Initialization) ──────────────────────────
@@ -74,6 +72,20 @@ uint8_t       lastHoldStage = 0;
 uint32_t      lastStateUpdate = 0;
 uint32_t      lastTickerRefreshMs = 0;   // 1s live ticker auto-refresh
 CryptoCoin    currentViewCoin = COIN_BTC;
+uint32_t      lastVaultActivityMs = 0;
+// Every production build has a unique id; a key that hasn't completed setup on THIS build must
+// go through the setup portal first (it can't be skipped). Test builds are exempt for automation.
+#ifdef TKEY_TEST_SERIAL_TOUCH
+static const char FW_BUILD_ID[] = "test";
+#else
+static const char FW_BUILD_ID[] = __DATE__ " " __TIME__;
+#endif
+bool          setupRequired = false;
+EmergencyPolicy emergencyPolicy;         // per-trigger actions, set in the setup portal
+uint32_t      panicCountdownStart = 0;   // STATE_PANIC_COUNTDOWN
+bool          panicReleased = false;     // the hold that started the countdown has ended
+bool          s_panicPending = false;
+uint32_t      ignoreButtonsUntil = 0;    // swallows the tap that cancelled a countdown    // a panic hold during a FIDO prompt, handled by loop()   // auto-lock: last button press while the vault is unlocked
 bool          s_simulatedTouch = false;
 ButtonEvent   s_injectedEvent = BTN_NONE;   // test builds: remote button presses
 
@@ -89,7 +101,7 @@ int           totalSeedWords = 12;
 int           currentSeedViewIdx = 0;
 
 // Air-Gap PSBT Signer State
-char          psbtFilePath[64] = "";
+char          psbtFilePath[80] = "";
 PsbtTxDetails currentPsbt;
 bool          psbtLoaded = false;
 
@@ -98,6 +110,8 @@ char reqDomain[48]     = "webauthn.io";
 char reqChain[24]      = "Bitcoin Mainnet";
 char reqRecipient[48]  = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh";
 char reqAmount[32]     = "0.054 BTC ($3,450)";
+
+#define VAULT_AUTOLOCK_MS 120000   // an unlocked vault locks after 2 min without a press (and on display sleep)
 
 // ─── Forward Declarations ───────────────────────────────────────────────────
 void launchSetupPortal();
@@ -120,12 +134,118 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
 void renderCurrentPortfolioCard();
 void showReceiveScreen(const char* symbol, const char* hint);
 
+// Zeroizes every RAM copy of seed words / PIN digits the UI keeps outside CryptoWallet.
+void scrubSecretBuffers() {
+    mbedtls_platform_zeroize(generatedMnemonic, sizeof(generatedMnemonic));
+    mbedtls_platform_zeroize(mnemonicWords, sizeof(mnemonicWords));
+    mbedtls_platform_zeroize(verifiedSeedWords, sizeof(verifiedSeedWords));
+    mbedtls_platform_zeroize(pinDigits, sizeof(pinDigits));
+}
+
+// Locks the vault, scrubs the UI copies of secrets and leaves any screen that showed them.
+void lockVault(const char* why) {
+    if (wallet) wallet->lock();
+    scrubSecretBuffers();
+    Serial.printf("[VAULT] 🔒 Locked (%s)\n", why);
+    // A seed being created from an unlocked vault is abandoned too: its words were just scrubbed
+    if (deviceState == STATE_VAULT_DASHBOARD || deviceState == STATE_SEED_WORDS_VIEW ||
+        deviceState == STATE_AIRGAP_SD_SIGN || deviceState == STATE_SEED_ENTROPY_COLLECT ||
+        deviceState == STATE_SEED_WORD_DISPLAY) {
+        deviceState = STATE_IDLE_READY;
+        psbtLoaded = false;
+        rgb.setMode(LED_MODE_HOME);
+        if (!PowerManager::isDisplaySleeping()) {
+            const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
+            ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
+        }
+    }
+}
+
+void showWrongPinScreen() {
+    Serial.printf("[AUTH] Wrong PIN (%u attempts left)\n", PinVault::attemptsLeft());
+    char left[24];
+    snprintf(left, sizeof(left), "%u TRIES LEFT", PinVault::attemptsLeft());
+    ui.renderErrorBanner(PinVault::attemptsLeft() <= 3 ? left : "Wrong PIN Code");
+    rgb.setMode(LED_MODE_STROBE_RED);
+    delay(1200);
+    resetPinEntry();
+    rgb.setMode(LED_MODE_SOLID_AMBER);
+    ui.renderPinScreen(pinDigits, masterPinLen, pinIndex, currentDigitVal, 0);
+}
+
+// Carries out the user's emergency policy for a trigger. Returns only if the action was
+// ACT_NOTHING (a wipe never returns).
+void runEmergency(EmergencyTrigger trig, const char* reason) {
+    EmergencyAction act = emergencyPolicy.action[trig];
+    if (act == ACT_DECOY || act == ACT_DECOY_WIPE_CHIP) act = ACT_WIPE_CHIP;   // no decoy wallet yet (Phase B3)
+    if (act == ACT_NOTHING) return;
+    DuressWipe::setSdWipe(act == ACT_WIPE_CHIP_SHRED_SD);
+    deviceState = STATE_DURESS_WIPED;
+    DuressWipe::execute(*tft, rgb, reason);
+}
+
+void renderPanicCountdown(uint32_t secondsLeft) {
+    char detail[24];
+    snprintf(detail, sizeof(detail), "WIPING IN %lus", (unsigned long)secondsLeft);
+    ui.renderOobeWizard(0, "EMERGENCY WIPE", detail, "TAP TO CANCEL");
+}
+
+// Panic hold: runs the policy after the configured countdown; a new press cancels it.
+void startPanic() {
+    if (emergencyPolicy.action[TRIG_PANIC_HOLD] == ACT_NOTHING) return;
+    if (emergencyPolicy.panicCountdownS == 0) runEmergency(TRIG_PANIC_HOLD, "PANIC_HOLD");
+    PowerManager::wakeDisplay();
+    panicCountdownStart = millis();
+    panicReleased = !btn.isPressedNow();
+    deviceState = STATE_PANIC_COUNTDOWN;
+    rgb.setMode(LED_MODE_STROBE_RED);
+    renderPanicCountdown(emergencyPolicy.panicCountdownS);
+    Serial.println("[PANIC] Countdown started (tap to cancel)");
+}
+
+void processPanicCountdown() {
+    uint32_t elapsed = millis() - panicCountdownStart;
+    uint32_t total = (uint32_t)emergencyPolicy.panicCountdownS * 1000;
+    if (!btn.isPressedNow()) {
+        panicReleased = true;
+    } else if (panicReleased) {   // a fresh press (not the original hold) cancels
+        Serial.println("[PANIC] Cancelled");
+        lockVault("panic cancelled");
+        deviceState = STATE_IDLE_READY;
+        rgb.setMode(LED_MODE_HOME);
+        ui.renderSuccessBanner("WIPE CANCELLED", "NOTHING ERASED");
+        delay(1200);
+        ignoreButtonsUntil = millis() + 700;   // its release would otherwise read as a tap
+        const char* ssid = (wifi && wifi->isConnected()) ? wifi->getConnectedSsid() : "AIRGAP";
+        ui.renderHomeDashboard(millis() / 1000, ssid, PortfolioManager::getTotalValueUsd(), dispRotation == 3);
+        return;
+    }
+    if (elapsed >= total) runEmergency(TRIG_PANIC_HOLD, "PANIC_HOLD");
+    static uint32_t lastShown = 0;
+    uint32_t left = (total - elapsed + 999) / 1000;
+    if (left != lastShown) {
+        lastShown = left;
+        renderPanicCountdown(left);
+    }
+}
+
+bool setupDoneForThisBuild() {
+#ifdef TKEY_TEST_SERIAL_TOUCH
+    return true;
+#else
+    vaultPrefs.begin("vault_sec", true);
+    String done = vaultPrefs.getString("fw_setup", "");
+    vaultPrefs.end();
+    return done == FW_BUILD_ID;
+#endif
+}
+
 void showPortalScreen() {
     vaultPrefs.begin("vault_sec", true);
     bool provisioned = vaultPrefs.getBool("provisioned", false);
     vaultPrefs.end();
-    ui.renderPortalScreen(portal->apSsid(), portal->apPass(), portal->wifiQr(),
-                          provisioned ? "HOLD 3s: EXIT" : "SCAN TO JOIN");
+    const char* hint = setupRequired ? "NEW FIRMWARE: SETUP" : (provisioned ? "HOLD 3s: EXIT" : "SCAN TO JOIN");
+    ui.renderPortalScreen(portal->apSsid(), portal->apPass(), portal->wifiQr(), hint);
 }
 
 void launchSetupPortal() {
@@ -136,6 +256,7 @@ void launchSetupPortal() {
     deviceState = STATE_SETUP_WALKTHROUGH;
     if (wifi) wifi->setPortalActive(true);
     portal->begin(wallet, wifi, isProvisioned);
+    portal->setSetupRequired(setupRequired);
     showPortalScreen();
     rgb.setMode(LED_MODE_SOFTAP_PULSE);
 }
@@ -145,7 +266,12 @@ void closeSetupPortal(bool saved) {
     portal->stop();
     if (wifi) wifi->setPortalActive(false);
     if (saved) {
+        vaultPrefs.begin("vault_sec", false);
+        vaultPrefs.putString("fw_setup", FW_BUILD_ID);   // this build's setup is complete
+        vaultPrefs.end();
+        setupRequired = false;
         masterPinLen = PinVault::length();
+        emergencyPolicy = EmergencyPolicyStore::load();
         if (wallet) wallet->refreshFamilies();   // addresses only for the selected coins
         PortfolioManager::resetIndex();
         rgb.flashRainbow(800);
@@ -160,7 +286,6 @@ void closeSetupPortal(bool saved) {
 
 // ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
-    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
 
     // 1. Initialize Thermal & Power Management (80MHz, RF disabled)
     PowerManager::init();
@@ -207,6 +332,12 @@ void setup() {
     wallet = new CryptoWallet();
     wallet->begin();
 
+    // Any emergency wipe first drops the unlocked keys and every UI copy of seed words from RAM
+    DuressWipe::setRamScrubber([]() {
+        if (wallet) wallet->lock();
+        scrubSecretBuffers();
+    });
+
     ctapHid.setWinkHandler([](uint32_t cid) {
         Serial.printf("[FIDO2] 😉 WINK identification triggered on CID 0x%08X!\n", cid);
         rgb.flashRainbow(1500);
@@ -239,7 +370,9 @@ void setup() {
     bool isProvisioned = vaultPrefs.getBool("provisioned", false);
     vaultPrefs.end();
 
-    if (!isProvisioned || btn.isPressedNow()) {
+    setupRequired = !setupDoneForThisBuild();
+    if (!isProvisioned || setupRequired || btn.isPressedNow()) {
+        if (setupRequired) Serial.printf("[BOOT] New firmware (%s): setup must be completed first\n", FW_BUILD_ID);
         launchSetupPortal();
     } else {
         deviceState = STATE_IDLE_READY;
@@ -266,16 +399,53 @@ void loop() {
 
     if (portal && portal->isRunning()) {
         portal->update();
-        if (portal->isSetupDone()) closeSetupPortal(true);
-        else if (portal->isExitRequested()) closeSetupPortal(false);
+        // Live preview: the setup page's colour picker drives the real LED while a preview is
+        // active; otherwise the LED shows the setup hotspot pulse.
+        LedMode want = homeTheme.previewActive ? LED_MODE_HOME : LED_MODE_SOFTAP_PULSE;
+        if (rgb.currentMode() != want && deviceState == STATE_SETUP_WALKTHROUGH) rgb.setMode(want);
+        if (portal->policyChanged()) {
+            emergencyPolicy = EmergencyPolicyStore::load();
+            portal->clearPolicyChanged();
+        }
+        if (portal->emergencyRequested()) {
+            // A duress PIN or the lockout was hit in the portal: radio off first, then the policy
+            // (policy "nothing": leave the portal open, exactly as after a wrong PIN)
+            EmergencyTrigger trig = portal->emergencyTrigger();
+            portal->clearEmergency();
+            if (emergencyPolicy.action[trig] != ACT_NOTHING) {
+                closeSetupPortal(false);
+                runEmergency(trig, trig == TRIG_DURESS_PIN ? "DURESS_PIN_PORTAL" : "PIN_ATTEMPTS_PORTAL");
+            }
+        } else if (portal->isSetupDone() || portal->isExitRequested()) {
+            // Keep the hotspot up briefly so the page actually receives its "saved" reply: the
+            // HTTP response is still in the Wi-Fi stack's buffers when the handler returns, and
+            // switching the radio off at once left the browser waiting until it timed out.
+            static uint32_t doneAt = 0;
+            if (!doneAt) doneAt = millis() ? millis() : 1;
+            if (millis() - doneAt >= 1500) {
+                doneAt = 0;
+                closeSetupPortal(portal->isSetupDone());
+            }
+        }
     }
 
+    if (ignoreButtonsUntil) {   // 0 = off (a bare signed compare against 0 would misfire after ~24.8 days)
+        if ((int32_t)(millis() - ignoreButtonsUntil) < 0) ev = BTN_NONE;
+        else ignoreButtonsUntil = 0;
+    }
     bool userActive = (ev != BTN_NONE);
     if (userActive && PowerManager::isDisplaySleeping() && ev != BTN_PANIC_HOLD) {
         PowerManager::update(true);   // wake only; don't act on a press the user couldn't see
         ev = BTN_NONE;
     }
     PowerManager::update(userActive);
+
+    // Auto-lock: 2 min without a press, or the display going to sleep, closes the vault
+    if (wallet && wallet->isUnlocked()) {
+        if (userActive) lastVaultActivityMs = millis();
+        if (PowerManager::isDisplaySleeping()) lockVault("display sleep");
+        else if (millis() - lastVaultActivityMs > VAULT_AUTOLOCK_MS) lockVault("idle timeout");
+    }
 
     handleSerialCommands();
 
@@ -287,6 +457,14 @@ void loop() {
         lastTickerRefreshMs = millis();
     }
 
+    // Panic hold from every screen (the FIDO prompt runs its own loop and hands it over here)
+    if ((ev == BTN_PANIC_HOLD || s_panicPending) && deviceState != STATE_DURESS_WIPED &&
+        deviceState != STATE_PANIC_COUNTDOWN) {
+        s_panicPending = false;
+        ev = BTN_NONE;
+        startPanic();
+    }
+
     switch (deviceState) {
         case STATE_SETUP_WALKTHROUGH: {
             // First-time setup can't be skipped; an already set-up key can leave without saving.
@@ -294,7 +472,7 @@ void loop() {
                 vaultPrefs.begin("vault_sec", true);
                 bool provisioned = vaultPrefs.getBool("provisioned", false);
                 vaultPrefs.end();
-                if (provisioned) closeSetupPortal(false);
+                if (provisioned && !setupRequired) closeSetupPortal(false);
             } else if (ev == BTN_SHORT_PRESS || ev == BTN_LONG_PRESS) {
                 showPortalScreen();   // redraw (e.g. after the display woke up)
             }
@@ -332,9 +510,10 @@ void loop() {
                 ev == BTN_VERY_LONG_PRESS) {
                 deviceState = STATE_PORTFOLIO_TRACKER;
                 renderCurrentPortfolioCard();
-            } else if (ev == BTN_PANIC_HOLD) {
-                DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
             }
+            break;
+        case STATE_PANIC_COUNTDOWN:
+            processPanicCountdown();
             break;
         case STATE_DURESS_WIPED:
             delay(100);
@@ -375,8 +554,6 @@ void processIdleReadyState(ButtonEvent ev) {
     } else if (ev == BTN_LONG_PRESS) {
         // Long press dims / toggles sleep
         PowerManager::toggleDisplaySleep();
-    } else if (ev == BTN_PANIC_HOLD) {
-        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
@@ -412,8 +589,6 @@ void processPasskeyHubState(ButtonEvent ev) {
         ui.renderSuccessBanner("FIDO2 ARMED", "READY FOR LOGIN");
         delay(800);
         ui.renderPasskeyHub(false, nullptr, 1.0f);
-    } else if (ev == BTN_PANIC_HOLD) {
-        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
@@ -464,8 +639,6 @@ void processPortfolioTrackerState(ButtonEvent ev) {
         rgb.setMode(LED_MODE_SOLID_AMBER);
         ui.renderPinScreen(pinDigits, masterPinLen, pinIndex, currentDigitVal, 0);
         Serial.println("[VAULT] Entering Master PIN gate (4-8 digits)...");
-    } else if (ev == BTN_PANIC_HOLD) {
-        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
@@ -518,10 +691,18 @@ void processPinEntryState(ButtonEvent ev) {
             CryptoWallet::secureZero(pinDigits, sizeof(pinDigits));
 
             if (pr == PinVault::DURESS) {
-                DuressWipe::execute(*tft, rgb, "DURESS_PIN");
+                runEmergency(TRIG_DURESS_PIN, "DURESS_PIN");
+                showWrongPinScreen();   // policy "nothing": indistinguishable from a wrong PIN
             } else if (pr == PinVault::LOCKED_OUT) {
-                Serial.println("[AUTH] Too many wrong PINs: anti-hammering wipe");
-                DuressWipe::execute(*tft, rgb, "PIN_ATTEMPTS");
+                Serial.println("[AUTH] Too many wrong PINs");
+                runEmergency(TRIG_PIN_LOCKOUT, "PIN_ATTEMPTS");
+                // policy "nothing": the key stays locked (the setup portal can set a new PIN)
+                deviceState = STATE_IDLE_READY;
+                ui.renderErrorBanner("KEY LOCKED");
+                rgb.setMode(LED_MODE_STROBE_RED);
+                delay(1500);
+                rgb.setMode(LED_MODE_HOME);
+                ui.renderReadyDashboard(millis() / 1000, true, false);
             } else if (pr == PinVault::OK && !wallet->hasSeed()) {
                 Serial.println("[VAULT] PIN accepted. No wallet yet: starting seed creation.");
                 ui.renderSuccessBanner("CREATE YOUR WALLET", "TAP 12x FOR ENTROPY");
@@ -538,6 +719,7 @@ void processPinEntryState(ButtonEvent ev) {
                     ui.renderReadyDashboard(millis() / 1000, true, false);
                     return;
                 }
+                lastVaultActivityMs = millis();
                 Serial.println("[VAULT] PIN accepted. Vault unlocked.");
                 rgb.flashRainbow(800);
                 ui.renderSuccessBanner("VAULT UNLOCKED", "CRYPTO SIGNER READY");
@@ -546,23 +728,13 @@ void processPinEntryState(ButtonEvent ev) {
                 deviceState = STATE_VAULT_DASHBOARD;
                 showVaultCoinScreen(COIN_BTC);
             } else {
-                Serial.printf("[AUTH] Wrong PIN (%u attempts left before wipe)\n", PinVault::attemptsLeft());
-                char left[24];
-                snprintf(left, sizeof(left), "%u TRIES LEFT", PinVault::attemptsLeft());
-                ui.renderErrorBanner(PinVault::attemptsLeft() <= 3 ? left : "Wrong PIN Code");
-                rgb.setMode(LED_MODE_STROBE_RED);
-                delay(1200);
-                resetPinEntry();
-                rgb.setMode(LED_MODE_SOLID_AMBER);
-                ui.renderPinScreen(pinDigits, masterPinLen, pinIndex, currentDigitVal, 0);
+                showWrongPinScreen();
             }
         }
     } else if (ev == BTN_VERY_LONG_PRESS) {
         resetPinEntry();
         rgb.flashDoubleTap(255, 0, 0);
         ui.renderPinScreen(pinDigits, masterPinLen, pinIndex, currentDigitVal, 0);
-    } else if (ev == BTN_PANIC_HOLD) {
-        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
@@ -625,6 +797,7 @@ void processVaultDashboardState(ButtonEvent ev) {
     } else if (ev == BTN_LONG_PRESS) {
         // Long press locks vault and returns to Screen 3: Crypto Hub
         wallet->lock();
+        scrubSecretBuffers();
         deviceState = STATE_PORTFOLIO_TRACKER;
         PowerManager::setKeepAwake(true);
         CoinAsset* coin = PortfolioManager::getCurrentCoin();
@@ -637,8 +810,6 @@ void processVaultDashboardState(ButtonEvent ev) {
         // Very long press launches the Air-Gap MicroSD PSBT Signer
         deviceState = STATE_AIRGAP_SD_SIGN;
         scanAndRenderAirGapPsbt();
-    } else if (ev == BTN_PANIC_HOLD) {
-        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
@@ -663,6 +834,7 @@ void parseWalletSeedWords() {
         token = strtok(nullptr, " ");
         count++;
     }
+    mbedtls_platform_zeroize(temp, sizeof(temp));
     totalSeedWords = (count > 0) ? count : 12;
 }
 
@@ -679,11 +851,10 @@ void processSeedWordsViewState(ButtonEvent ev) {
         ui.renderSeedWordsView(currentSeedViewIdx + 1, totalSeedWords, verifiedSeedWords[currentSeedViewIdx]);
     } else if (ev == BTN_LONG_PRESS || ev == BTN_VERY_LONG_PRESS) {
         // Exit back to Vault Dashboard
+        mbedtls_platform_zeroize(verifiedSeedWords, sizeof(verifiedSeedWords));
         deviceState = STATE_VAULT_DASHBOARD;
         showVaultCoinScreen(currentViewCoin);
         Serial.println("[VAULT] Exited Seed Words View -> Vault Dashboard");
-    } else if (ev == BTN_PANIC_HOLD) {
-        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
@@ -715,14 +886,17 @@ void processSeedEntropyState(ButtonEvent ev) {
             if (ok) {
                 // Parse words
                 char temp[240];
-                strncpy(temp, generatedMnemonic, sizeof(temp));
+                strncpy(temp, generatedMnemonic, sizeof(temp) - 1);
+                temp[sizeof(temp) - 1] = '\0';
                 char* token = strtok(temp, " ");
                 int i = 0;
                 while (token && i < totalMnemonicWords) {
                     strncpy(mnemonicWords[i], token, sizeof(mnemonicWords[i]) - 1);
+                    mnemonicWords[i][sizeof(mnemonicWords[i]) - 1] = '\0';
                     token = strtok(nullptr, " ");
                     i++;
                 }
+                mbedtls_platform_zeroize(temp, sizeof(temp));
 
                 currentWordIdx = 0;
                 deviceState = STATE_SEED_WORD_DISPLAY;
@@ -751,11 +925,18 @@ void processSeedWordDisplayState(ButtonEvent ev) {
         rgb.flashDoubleTap(255, 140, 0);
         ui.renderSeedBackupScreen(currentWordIdx + 1, totalMnemonicWords, mnemonicWords[currentWordIdx]);
     } else if (ev == BTN_LONG_PRESS) {
-        // Complete seed verification
-        if (wallet) {
-            wallet->setMnemonic(generatedMnemonic);
-            Serial.println("[WALLET] ✅ New verified BIP-39 mnemonic installed into active crypto wallet.");
+        // Complete seed verification. Only report success once the seed is really stored:
+        // on failure stay on the words so the user doesn't discard a backup of an unsaved seed.
+        if (!wallet || !wallet->setMnemonic(generatedMnemonic)) {
+            Serial.println("[WALLET] ❌ Could not store the new seed; words kept on screen, hold to retry.");
+            rgb.flashDoubleTap(255, 0, 0);
+            ui.renderErrorBanner("SEED NOT SAVED");
+            delay(1500);
+            ui.renderSeedBackupScreen(currentWordIdx + 1, totalMnemonicWords, mnemonicWords[currentWordIdx]);
+            return;
         }
+        scrubSecretBuffers();   // the wallet holds the (encrypted) seed now
+        Serial.println("[WALLET] ✅ New verified BIP-39 mnemonic installed into active crypto wallet.");
         rgb.flashRainbow(1000);
         ui.renderSuccessBanner("SEED BACKUP COMPLETE", "WALLET SECURED");
         delay(1200);
@@ -767,35 +948,58 @@ void processSeedWordDisplayState(ButtonEvent ev) {
 }
 
 // ─── State: Air-Gap MicroSD PSBT Signer (BIP-174 Cold Wallet) ────────────────
+// Pages: one per external output (full address), then the totals. Signing is offered only on
+// the totals page, and only after every output page has been shown.
+size_t psbtPage = 0;
+bool   psbtAllSeen = false;
+
+void renderPsbtPage() {
+    const PsbtCore::Result& r = currentPsbt.r;
+    if (psbtPage < r.outputCount) {
+        char amount[32];
+        PsbtSigner::formatSatoshis(r.outputs[psbtPage].amountSats, amount, sizeof(amount));
+        ui.renderPsbtOutput((int)psbtPage + 1, (int)r.outputCount, r.outputs[psbtPage].address, amount);
+    } else {
+        char send[32], change[32], fee[32];
+        PsbtSigner::formatSatoshis(r.externalSats, send, sizeof(send));
+        PsbtSigner::formatSatoshis(r.changeSats, change, sizeof(change));
+        PsbtSigner::formatSatoshis(r.feeSats, fee, sizeof(fee));
+        ui.renderPsbtSummary(send, change, fee, (int)r.foreignInputs);
+        psbtAllSeen = true;
+    }
+}
+
 void scanAndRenderAirGapPsbt() {
     rgb.setMode(LED_MODE_SOLID_BLUE);
+    psbtLoaded = false;
+    psbtPage = 0;
+    psbtAllSeen = false;
     if (!PsbtSigner::initSD()) {
         ui.renderAirGapScreen("MICROSD ERROR", "NO TF CARD DETECTED", false);
-        psbtLoaded = false;
         return;
     }
-
-    if (PsbtSigner::findPendingPsbt(psbtFilePath, sizeof(psbtFilePath))) {
-        psbtLoaded = PsbtSigner::parsePsbtFile(psbtFilePath, currentPsbt, *wallet);
-        if (psbtLoaded && currentPsbt.isValid) {
-            char amtStr[32], feeStr[32];
-            PsbtSigner::formatSatoshis(currentPsbt.sendSatoshis, amtStr, sizeof(amtStr));
-            snprintf(feeStr, sizeof(feeStr), "FEE: %llu sat", currentPsbt.feeSatoshis);
-            ui.renderAirGapPsbt(currentPsbt.fileName, currentPsbt.recipientAddr, amtStr, feeStr, true);
-            rgb.setMode(LED_MODE_PULSE_GREEN); // Pulse green: User presence required to sign!
-            Serial.printf("[PSBT] Loaded %s: %s -> %s\n", currentPsbt.fileName, amtStr, currentPsbt.recipientAddr);
-        } else {
-            ui.renderAirGapScreen(psbtFilePath, "INVALID PSBT FORMAT", false);
-            rgb.flashDoubleTap(255, 140, 0);
-        }
-    } else {
+    if (!PsbtSigner::findPendingPsbt(psbtFilePath, sizeof(psbtFilePath))) {
         ui.renderAirGapScreen("NO PENDING .PSBT", "SD CARD READY", false);
+        return;
+    }
+    psbtLoaded = PsbtSigner::parsePsbtFile(psbtFilePath, currentPsbt, *wallet);
+    if (psbtLoaded && currentPsbt.isValid) {
+        renderPsbtPage();
+        rgb.setMode(LED_MODE_PULSE_GREEN);
+        Serial.printf("[PSBT] %s: %u output(s) to review, fee %llu sat\n", currentPsbt.fileName,
+                      (unsigned)currentPsbt.r.outputCount, currentPsbt.r.feeSats);
+    } else {
+        // Say why: "no input from this wallet", "fee invalid or too high", ...
+        ui.renderAirGapScreen(psbtFilePath, PsbtCore::errorName(currentPsbt.error), false);
+        rgb.flashDoubleTap(255, 140, 0);
         psbtLoaded = false;
     }
 }
 
 void processAirGapSdSignState(ButtonEvent ev) {
-    if (btn.isPressedNow() && psbtLoaded && currentPsbt.isValid) {
+    bool reviewable = psbtLoaded && currentPsbt.isValid;
+    bool onSummary = reviewable && psbtPage >= currentPsbt.r.outputCount;
+    if (btn.isPressedNow() && onSummary && psbtAllSeen) {
         uint8_t stage = btn.getHoldStage() * 33;
         if (stage != lastHoldStage) {
             lastHoldStage = stage;
@@ -803,37 +1007,39 @@ void processAirGapSdSignState(ButtonEvent ev) {
         }
     } else if (lastHoldStage > 0) {
         lastHoldStage = 0;
-        if (psbtLoaded && currentPsbt.isValid) rgb.setMode(LED_MODE_PULSE_GREEN);
+        if (reviewable) rgb.setMode(LED_MODE_PULSE_GREEN);
     }
 
     if (ev == BTN_SHORT_PRESS) {
-        // Rescan SD card
         rgb.flashTap(0, 150, 255, 60);
-        scanAndRenderAirGapPsbt();
-    } else if (ev == BTN_DOUBLE_CLICK || ev == BTN_VERY_LONG_PRESS) {
-        // Exit back to Vault Dashboard
+        if (!reviewable) {
+            scanAndRenderAirGapPsbt();   // rescan the card
+        } else {
+            psbtPage = onSummary ? 0 : psbtPage + 1;   // next output, the totals, then back to the first
+            renderPsbtPage();
+        }
+    } else if (ev == BTN_DOUBLE_CLICK) {
         deviceState = STATE_VAULT_DASHBOARD;
         showVaultCoinScreen(COIN_BTC);
-    } else if (ev == BTN_LONG_PRESS) {
-        if (psbtLoaded && currentPsbt.isValid) {
-            char signedPath[64] = "";
-            bool ok = PsbtSigner::signPsbtFile(psbtFilePath, *wallet, signedPath, sizeof(signedPath));
-            if (ok) {
-                rgb.flashRainbow(1200);
-                ui.renderSuccessBanner("PSBT SIGNED OK", signedPath);
-                Serial.printf("[PSBT] ✅ Signed and saved to: %s\n", signedPath);
-                delay(1500);
-                deviceState = STATE_VAULT_DASHBOARD;
-                showVaultCoinScreen(COIN_BTC);
-            } else {
-                rgb.flashDoubleTap(255, 0, 0);
-                ui.renderErrorBanner("SIGNING FAILED");
-                delay(1200);
-                scanAndRenderAirGapPsbt();
-            }
+    } else if (ev == BTN_VERY_LONG_PRESS) {
+        scanAndRenderAirGapPsbt();
+    } else if (ev == BTN_LONG_PRESS && onSummary && psbtAllSeen) {
+        if (!ui.sprite()) return;   // never sign what couldn't be shown
+        char signedPath[96] = "";
+        bool ok = PsbtSigner::signPsbtFile(psbtFilePath, *wallet, signedPath, sizeof(signedPath));
+        if (ok) {
+            rgb.flashRainbow(1200);
+            ui.renderSuccessBanner("PSBT SIGNED", signedPath);
+            Serial.printf("[PSBT] ✅ Signed and saved to: %s\n", signedPath);
+            delay(1500);
+            deviceState = STATE_VAULT_DASHBOARD;
+            showVaultCoinScreen(COIN_BTC);
+        } else {
+            rgb.flashDoubleTap(255, 0, 0);
+            ui.renderErrorBanner("SIGNING FAILED");
+            delay(1200);
+            scanAndRenderAirGapPsbt();
         }
-    } else if (ev == BTN_PANIC_HOLD) {
-        DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
     }
 }
 
@@ -901,8 +1107,9 @@ bool handleUserPresencePrompt(uint32_t cid, const char* rpId, bool isRegistratio
             ui.renderErrorBanner("Auth Cancelled");
             delay(1000);
         } else if (ev == BTN_PANIC_HOLD) {
-            DuressWipe::execute(*tft, rgb, "PANIC_HOLD");
-            return false;
+            s_panicPending = true;   // loop() runs the panic policy once this request is answered
+            confirmed = false;
+            done = true;
         }
 
         delay(15);
@@ -943,6 +1150,8 @@ void loadSecurityConfig() {
     vaultPrefs.end();
 
     PinVault::begin();  // migrates any legacy plaintext PIN to a salted hash
+    emergencyPolicy = EmergencyPolicyStore::load();
+    DeviceClock::begin();
     masterPinLen = PinVault::length();
     if (masterPinLen < PIN_MIN_LENGTH) masterPinLen = PIN_MIN_LENGTH;
     if (masterPinLen > PIN_MAX_LENGTH) masterPinLen = PIN_MAX_LENGTH;
@@ -962,8 +1171,13 @@ void handleSerialCommands() {
             CryptoCoinRegistry::savePreferences();
             if (wallet) wallet->refreshFamilies();
         }
-        lastTickerRefreshMs = millis();
-        renderCurrentPortfolioCard();
+        // Only redraw when the portfolio is on screen: the laptop's price tracker sends about one
+        // update a second, which used to paint the portfolio card over the home screen, the PIN
+        // entry and even the FIDO approval prompt ("it acts up when plugged into my computer").
+        if (deviceState == STATE_PORTFOLIO_TRACKER) {
+            lastTickerRefreshMs = millis();
+            renderCurrentPortfolioCard();
+        }
         return;
     }
 
@@ -1018,6 +1232,7 @@ void handleSerialCommands() {
         String pin = cmd.substring(7);
         pin.trim();
         if (PinVault::check(pin.c_str()) == PinVault::OK && wallet->unlock()) {
+            lastVaultActivityMs = millis();
             deviceState = STATE_VAULT_DASHBOARD;
             showVaultCoinScreen(COIN_BTC);
             Serial.println("[VAULT] ✅ Unlocked (test build).");
@@ -1032,12 +1247,12 @@ void handleSerialCommands() {
         nvs_stats_t nvs = {};
         nvs_get_stats(NULL, &nvs);
         Serial.printf("DIAG state=%d uptime=%lus heap=%u minheap=%u reset=%d wifimode=%d usbhost=%d "
-                      "loopstack=%u led=%u,%u,%u@%u mode=%d sleeping=%d nvsused=%u nvsfree=%u\n",
+                      "loopstack=%u led=%u,%u,%u@%u mode=%d sleeping=%d nvsused=%u nvsfree=%u hiddrop=%u\n",
                       (int)deviceState, millis() / 1000, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
                       (int)esp_reset_reason(), (int)WiFi.getMode(), (int)(bool)USB,
                       (unsigned)uxTaskGetStackHighWaterMark(nullptr), rgb.lastR, rgb.lastG, rgb.lastB,
                       rgb.lastBrightness, (int)rgb.currentMode(), (int)PowerManager::isDisplaySleeping(),
-                      (unsigned)nvs.used_entries, (unsigned)nvs.free_entries);
+                      (unsigned)nvs.used_entries, (unsigned)nvs.free_entries, (unsigned)ctapHid.droppedPackets());
 #ifdef TKEY_TEST_SERIAL_TOUCH
     } else if (cmd.startsWith("btn ")) {
         String b = cmd.substring(4);
@@ -1071,6 +1286,35 @@ void handleSerialCommands() {
     } else if (cmd.equalsIgnoreCase("portal")) {
         launchSetupPortal();   // test builds: same as holding the button while plugging in
         Serial.println("[TEST] setup portal launched");
+    } else if (cmd.equalsIgnoreCase("portalinfo")) {
+        // Test builds: what a hardware test needs to join the hotspot and drive the real portal
+        const char *sess = "", *csrf = "";
+        if (portal && portal->isRunning()) portal->testSession(&sess, &csrf);
+        Serial.printf("PORTAL ssid=%s pass=%s session=%s csrf=%s\n", portal ? portal->apSsid() : "",
+                      portal ? portal->apPass() : "", sess, csrf);
+    } else if (cmd.startsWith("fullbackup ") || cmd.startsWith("fullrestore ")) {
+        // Test builds: full device-bound backup / restore with the given setup password
+        bool isBackup = cmd.startsWith("fullbackup ");
+        String pw = cmd.substring(isBackup ? 11 : 12);
+        pw.trim();
+        uint32_t t0 = millis();
+        uint32_t prevMhz = getCpuFrequencyMhz();
+        setCpuFrequencyMhz(240);   // PBKDF2 at full speed, then back to the 80 MHz idle clock
+        bool ok = isBackup ? sdVault.backupFull(pw.c_str()) : sdVault.restoreFull(pw.c_str());
+        setCpuFrequencyMhz(prevMhz);
+        Serial.printf("FULL %s %s %lums\n", isBackup ? "BACKUP" : "RESTORE", ok ? "OK" : "FAIL", millis() - t0);
+        if (ok && !isBackup) {
+            delay(200);
+            ESP.restart();   // restored settings take effect from a clean boot
+        }
+    } else if (cmd.equalsIgnoreCase("theme")) {
+        uint8_t r, g, b;
+        float lvl;
+        homeTheme.currentFrame(millis(), r, g, b, lvl);
+        Serial.printf("THEME saved=%06lx fx=%d speed=%d bright=%d custom=%d preview=%d activefx=%d frame=%02x%02x%02x@%.2f ledmode=%d\n",
+                      (unsigned long)homeTheme.savedRgb(), (int)homeTheme.fx, homeTheme.speed, (int)homeTheme.brightness,
+                      homeTheme.activeCustomMode, homeTheme.previewActive, (int)homeTheme.activeFx(), r, g, b, lvl,
+                      (int)rgb.currentMode());
     } else if (cmd.equalsIgnoreCase("nvsdump")) {
         // Entries per namespace (sizes only, never values)
         nvs_iterator_t it = nullptr;
@@ -1107,6 +1351,14 @@ void handleSerialCommands() {
         }
         Serial.println("FAM END");
 #endif
+    } else if (cmd.startsWith("time ")) {
+        // Laptop companion: "time <unix-epoch> [utc-offset-minutes]" (display only, no PIN needed)
+        long long epoch = 0;
+        int off = 0;
+        int n = sscanf(cmd.c_str() + 5, "%lld %d", &epoch, &off);
+        bool ok = n >= 1 && epoch > 0 && epoch < 0xFFFFFFFFLL &&
+                  DeviceClock::set((uint32_t)epoch, (int16_t)off, n == 2);
+        Serial.println(ok ? "TIME OK" : "TIME ERR");
     } else if (cmd.equalsIgnoreCase("addrs")) {
         // Machine-readable public receive addresses for the host companion (balances).
         // Public data only, cached at seed creation, so this works while locked.
@@ -1146,6 +1398,7 @@ void handleSerialCommands() {
         }
     } else if (cmd.equalsIgnoreCase("lock")) {
         wallet->lock();
+        scrubSecretBuffers();
         deviceState = STATE_IDLE_READY;
         rgb.setMode(LED_MODE_HOME);
         ui.renderReadyDashboard(millis() / 1000, true, false);
@@ -1182,24 +1435,30 @@ void handleSerialCommands() {
             } else {
                 Serial.println("[PSBT] ℹ️ No pending unsigned .psbt files found on MicroSD.");
             }
+        } else if (sub.equalsIgnoreCase("parse") && !wallet->isUnlocked()) {
+            Serial.println("[PSBT] Unlock the vault on the device first: ownership is checked against your keys.");
         } else if (sub.equalsIgnoreCase("parse")) {
-            char p[64];
+            char p[80];
             if (PsbtSigner::findPendingPsbt(p, sizeof(p))) {
                 PsbtTxDetails details;
                 if (PsbtSigner::parsePsbtFile(p, details, *wallet)) {
                     char amtStr[32], feeStr[32];
-                    PsbtSigner::formatSatoshis(details.sendSatoshis, amtStr, sizeof(amtStr));
+                    PsbtSigner::formatSatoshis(details.changeSatoshis, amtStr, sizeof(amtStr));
                     PsbtSigner::formatSatoshis(details.feeSatoshis, feeStr, sizeof(feeStr));
                     Serial.println("\n--- PSBT Transaction Details (BIP-174 WYSIWYS) ---");
                     Serial.printf("  File:      %s\n", details.fileName);
-                    Serial.printf("  To:        %s\n", details.recipientAddr);
-                    Serial.printf("  Amount:    %s (%llu sats)\n", amtStr, details.sendSatoshis);
+                    for (size_t o = 0; o < details.r.outputCount; o++) {
+                        char a[32];
+                        PsbtSigner::formatSatoshis(details.r.outputs[o].amountSats, a, sizeof(a));
+                        Serial.printf("  Send:      %s -> %s\n", a, details.r.outputs[o].address);
+                    }
+                    Serial.printf("  Change:    %s\n", amtStr);
                     Serial.printf("  Miner Fee: %s (%llu sats)\n", feeStr, details.feeSatoshis);
-                    Serial.printf("  Inputs:    %u | Outputs: %u\n", details.numInputs, details.numOutputs);
-                    Serial.printf("  Status:    %s\n", details.isSigned ? "ALREADY SIGNED" : "READY TO SIGN");
+                    Serial.printf("  Inputs:    %u yours, %u foreign\n", (unsigned)details.r.oursInputs,
+                                  (unsigned)details.r.foreignInputs);
                     Serial.println("--------------------------------------------------\n");
                 } else {
-                    Serial.println("[PSBT] ❌ Error: Could not parse PSBT structure.");
+                    Serial.printf("[PSBT] ❌ Refused: %s\n", PsbtCore::errorName(details.error));
                 }
             } else {
                 Serial.println("[PSBT] ℹ️ Error: No pending .psbt file found.");
@@ -1241,46 +1500,40 @@ void handleSerialCommands() {
             } else {
                 Serial.println("[SD VAULT] ❌ No MicroSD card detected or mount failed. Check slot (Pins: CLK=12, CMD=16, D0=17).");
             }
-        } else if (sub.startsWith("backup")) {
-            String pin = sub.substring(6);
-            pin.trim();
-            const char* mnemonic = wallet->getMnemonicPhrase();
-            if (!wallet->isUnlocked()) {
-                Serial.println("[SD VAULT] 🔒 Unlock the vault on the device first.");
-            } else if (pin.length() < PIN_MIN_LENGTH) {
-                Serial.println("[SD VAULT] Usage: vault backup <backup PIN> (4+ digits)");
-            } else if (!mnemonic || strlen(mnemonic) == 0) {
-                Serial.println("[SD VAULT] ❌ Error: No seed mnemonic active in wallet.");
-            } else if (sdVault.backupSeed(mnemonic, pin.c_str())) {
-                rgb.flashRainbow(800);
-                Serial.println("[SD VAULT] 🔒✅ Backup SUCCESS: Active BIP-39 seed encrypted to /vault/tkey_backup.vault (AES-256-GCM).");
+        } else if (sub.startsWith("backup") || sub.startsWith("restore")) {
+#ifdef TKEY_TEST_SERIAL_TOUCH
+            // Test builds: vault backup <passphrase> / vault restore <passphrase> (12+ characters)
+            bool isBackup = sub.startsWith("backup");
+            String secret = sub.substring(isBackup ? 6 : 7);
+            secret.trim();
+            if (isBackup) {
+                const char* mnemonic = wallet->getMnemonicPhrase();
+                bool ok = wallet->isUnlocked() && mnemonic && mnemonic[0] &&
+                          sdVault.backupSeedV2(mnemonic, secret.c_str());
+                Serial.println(ok ? "[SD VAULT] ✅ Backup written (v2, passphrase)." : "[SD VAULT] ❌ Backup failed (vault locked, no card, or passphrase < 12 chars).");
             } else {
-                Serial.println("[SD VAULT] ❌ Error: Failed to write encrypted backup to SD card.");
+                char restored[256] = {0};
+                bool ok = (!wallet->hasSeed() || wallet->isUnlocked()) &&
+                          sdVault.restoreSeed(restored, sizeof(restored), secret.c_str()) &&
+                          wallet->setMnemonic(restored);
+                CryptoWallet::secureZero(restored, sizeof(restored));
+                Serial.println(ok ? "[SD VAULT] ✅ Restore complete." : "[SD VAULT] ❌ Restore failed.");
             }
-        } else if (sub.startsWith("restore")) {
-            String pin = sub.substring(7);
-            pin.trim();
-            char restoredMnemonic[256] = {0};
-            if (wallet->hasSeed() && !wallet->isUnlocked()) {
-                Serial.println("[SD VAULT] 🔒 A wallet exists: unlock it on the device before replacing it.");
-            } else if (sdVault.restoreSeed(restoredMnemonic, sizeof(restoredMnemonic), pin.c_str())) {
-                bool ok = wallet->setMnemonic(restoredMnemonic);
-                CryptoWallet::secureZero(restoredMnemonic, sizeof(restoredMnemonic));
-                if (ok) {
-                    rgb.flashRainbow(1200);
-                    Serial.println("[SD VAULT] 🔓✅ Restore SUCCESS: seed verified (GCM + BIP-39 checksum) and stored.");
-                } else {
-                    Serial.println("[SD VAULT] ❌ Restored data is not a valid BIP-39 seed; wallet unchanged.");
-                }
-            } else {
-                Serial.println("[SD VAULT] ❌ Error: Decryption or GCM integrity check failed! Wrong PIN, wrong hardware, or file tampered.");
-            }
+#else
+            // Backups take a passphrase and restores replace the wallet: both go through the
+            // password-protected setup portal, never an open serial port any local process can use.
+            Serial.println("[SD VAULT] Backup and restore are in the setup portal (hold the button while plugging in).");
+#endif
         } else if (sub.equalsIgnoreCase("wipe CONFIRM")) {
-            if (sdVault.wipeVault()) {
-                Serial.println("[SD VAULT] ⚠️ Vault containers securely overwritten and wiped from MicroSD.");
-            } else {
-                Serial.println("[SD VAULT] No vault files found to wipe.");
-            }
+#ifdef TKEY_TEST_SERIAL_TOUCH
+            WipeResult wr = sdVault.wipeVault();
+            Serial.println(wr == WIPE_OK      ? "[SD VAULT] ⚠️ Vault containers overwritten and removed from MicroSD." :
+                           wr == WIPE_NOTHING ? "[SD VAULT] No vault files found to wipe." :
+                                                "[SD VAULT] ❌ Wipe incomplete: a vault file could not be fully overwritten or removed.");
+#else
+            // Any local process can open the CDC port: destroying the backup needs the device.
+            Serial.println("[SD VAULT] Serial wipe is disabled; use the device's emergency policy.");
+#endif
         } else if (sub.equalsIgnoreCase("wipe")) {
             Serial.println("[SD VAULT] ⚠️ DANGER: To wipe all encrypted vaults from SD, type: 'vault wipe CONFIRM'");
         }
@@ -1386,7 +1639,8 @@ void handleSerialCommands() {
     } else if (cmd.equalsIgnoreCase("panic CONFIRM") || cmd.equalsIgnoreCase("panic NUKE")) {
 #ifdef TKEY_TEST_SERIAL_TOUCH
         Serial.println("[PANIC] 🚨 CONFIRMATION RECEIVED. Executing cryptographic flash scrub...");
-        DuressWipe::execute(*tft, rgb, "SERIAL_PANIC");
+        emergencyPolicy.panicCountdownS = 0;
+        startPanic();
 #else
         // A wipe destroys every FIDO key and the wallet: only the physical panic hold may do it.
         Serial.println("[PANIC] Serial wipe is disabled; hold the device button >6 s.");

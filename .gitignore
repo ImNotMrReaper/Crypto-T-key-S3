@@ -19,3 +19,6 @@ __pycache__/
 
 # Host-specific copy of the system PAM module (install locally, never publish)
 host/reaper_concurrent_biometric_pam.py
+
+# Local scratchpad and temporary notes
+scratchpad/

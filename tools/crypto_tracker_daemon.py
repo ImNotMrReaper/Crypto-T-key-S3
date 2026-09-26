@@ -91,6 +91,12 @@ def _safe_serial_write(line: str):
                 _serial_failed.set()
 
 
+def push_time():
+    """Send the laptop's clock: 'time <unix-epoch> <utc-offset-minutes>' (display only)."""
+    offset_min = int(time.localtime().tm_gmtoff // 60)
+    _safe_serial_write(f"time {int(time.time())} {offset_min}\n")
+
+
 def _push_price(sym: str, price: float, chg: float):
     """Push a price update to device if it changed meaningfully."""
     global _last_push
@@ -137,9 +143,9 @@ def _kraken_ws_thread():
                 price = float(item.get("last", 0))
                 if price <= 0:
                     continue
-                # 24h change: (last - open_24h) / open_24h * 100
-                open_24 = float(item.get("open_24h", price))
-                chg = ((price - open_24) / open_24 * 100.0) if open_24 > 0 else 0.0
+                # 24h change: Kraken WS v2 sends change_pct directly (it has no open_24h field,
+                # which is why every coin used to show +0.00%)
+                chg = float(item.get("change_pct", 0.0) or 0.0)
                 with _price_lock:
                     _price_cache[our_sym] = {"price": price, "change24h": chg}
                 _push_price(our_sym, price, chg)
@@ -274,6 +280,8 @@ def sync_cycle(port, ws_active=False):
     with _serial_lock:
         _serial_port = ser
 
+    push_time()   # the dongle has no battery clock: give it the laptop's time and UTC offset
+
     synced_coins = set()
 
     # ── 1. Fast tier: Kraken REST (instant, no WS required) ──────────────────
@@ -355,6 +363,7 @@ def live_push_loop(port, coingecko_interval=30, balance_interval=300):
 
     last_coingecko = 0
     last_balance   = 0
+    last_time      = 0
     synced_cg      = set()
 
     print("[TRACKER] 🚀 Live push loop active — streaming real-time ticks to LCD...")
@@ -368,6 +377,11 @@ def live_push_loop(port, coingecko_interval=30, balance_interval=300):
                 snapshot = dict(_price_cache)
             for sym, info in snapshot.items():
                 _push_price(sym, info["price"], info["change24h"])
+
+            # ── Clock: once a minute keeps the home-screen time within a second ──
+            if now - last_time >= 60:
+                last_time = now
+                push_time()
 
             # ── CoinGecko refresh for long-tail coins ─────────────────────────
             if now - last_coingecko >= coingecko_interval:

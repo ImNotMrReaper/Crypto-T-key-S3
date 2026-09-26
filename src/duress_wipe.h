@@ -14,10 +14,15 @@
 
 class DuressWipe {
 public:
+    static void setRamScrubber(void (*fn)());
+    static void setSdWipe(bool enabled);
     static void execute(TFT_eSPI& tft, RgbStatus& rgb, const char* reason = "PANIC_PIN");
     static bool isWiped();
 
 private:
+    static void (*_ramScrubber)();
+    static bool _sdWipeEnabled;
+
     static void zeroizeMemoryAndNVS();
     static void renderDecoyPanicScreen(TFT_eSPI& tft);
 };

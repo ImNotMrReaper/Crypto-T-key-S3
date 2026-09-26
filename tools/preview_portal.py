@@ -48,8 +48,11 @@ def state(kind):
                       1 if c["symbol"] in ON else 0])
     prov = kind == "provisioned"
     return {"auth": True, "csrf": "preview", "provisioned": prov, "hasPassword": prov, "hasPin": prov,
-            "hasDuress": False, "hasSeed": prov, "theme": {"rgb": "7764d8", "fx": 1},
-            "wifi": ["Reaper Home 5G"] if prov else [], "families": FAM_NAMES, "coins": coins}
+            "hasDuress": False, "hasSeed": prov, "key_name": "Reaper's T-Key" if prov else "T-KEY", "wallpaper": 1 if prov else 0,
+            "theme": {"rgb": "7764d8", "fx": 1, "speed": 3, "brightness": 1, "activeCustom": -1, "customModes": []},
+            "wifi": ["Reaper Home 5G"] if prov else [], "families": FAM_NAMES, "coins": coins,
+            "policy": {"duress": "wipe", "panic": "wipe", "lockout": "wipe", "countdown": 3},
+            "sd": {"mounted": True, "hasBackup": prov, "hasFullBackup": prov}}
 
 
 class H(BaseHTTPRequestHandler):

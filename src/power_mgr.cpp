@@ -14,9 +14,7 @@ void PowerManager::init() {
     //    retaining full cryptographic hardware acceleration for NIST P-256 / SHA-256)
     setCpuFrequencyMhz(80);
 
-    // 2. Explicitly cut power to Wi-Fi RF power amplifiers
-    esp_wifi_stop();
-    esp_wifi_deinit();
+    // 2. Wi-Fi RF power amplifiers are uninitialized and powered down by default at boot.
 
     // 3. Explicitly disable Bluetooth controller and power domains
     esp_bt_controller_disable();

@@ -15,6 +15,7 @@ public:
 
     // Entropy Accumulation
     static void resetEntropy();
+    static void wipe();
     static void recordButtonPressJitter(uint32_t pressDurationUs, uint32_t timeSinceLastPressUs);
     static int  getEntropySampleCount();
     static bool isEntropySufficient(); // True when >= 12 physical samples collected
@@ -24,6 +25,10 @@ public:
     static bool generateMnemonic24Words(char* outMnemonic, size_t maxLen);
     static const char* getWordFromIndex(uint16_t index);
     static uint16_t getWordIndex(const char* word);
+
+#ifdef HOST_TEST
+    static bool entropyPoolIsZeroForTest();
+#endif
 
 private:
     static uint8_t  _entropyPool[64];

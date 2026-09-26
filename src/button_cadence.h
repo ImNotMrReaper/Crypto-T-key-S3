@@ -24,7 +24,9 @@ private:
     uint32_t _lastDebounceTime = 0;
     uint32_t _pressStartTime = 0;
 
-    bool     _waitingForSecondTap = false;
-    uint32_t _firstTapReleaseTime = 0;
-    bool     _panicFired = false;
+    bool        _waitingForSecondTap = false;
+    uint32_t    _firstTapReleaseTime = 0;
+    bool        _isSecondTap = false;
+    bool        _panicFired = false;
+    ButtonEvent _pendingEvent = BTN_NONE;
 };

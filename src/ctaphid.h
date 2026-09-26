@@ -66,6 +66,8 @@ public:
     // Set when the host sends CTAPHID_CANCEL (or re-INITs) the channel whose
     // CBOR/MSG transaction is in flight; polled by the user-presence prompt.
     bool isCancelRequested() const { return _cancelRequested; }
+    // HID packets dropped because the RX queue was full (should stay 0).
+    uint32_t droppedPackets() const;
 
     // Callbacks to CTAP2 / CTAP1 core & telemetry
     typedef void (*CborHandler)(uint32_t cid, const uint8_t* req, uint16_t reqLen);

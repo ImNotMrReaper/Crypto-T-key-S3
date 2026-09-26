@@ -13,7 +13,8 @@ bool CborEncoder::appendByte(uint8_t byte) {
 }
 
 bool CborEncoder::append(const uint8_t* data, size_t len) {
-    if (_offset + len > _cap) return false;
+    if (len > (_cap - _offset)) return false;
+    if (len == 0) return true;
     memcpy(_buf + _offset, data, len);
     _offset += len;
     return true;
@@ -111,18 +112,18 @@ bool CborDecoder::readTypeAndValue(uint8_t* majorType, uint64_t* val) {
         *val = _buf[_offset++];
         return true;
     } else if (info == 25) {
-        if (_offset + 2 > _len) return false;
+        if (2 > (_len - _offset)) return false;
         *val = ((uint64_t)_buf[_offset] << 8) | _buf[_offset + 1];
         _offset += 2;
         return true;
     } else if (info == 26) {
-        if (_offset + 4 > _len) return false;
+        if (4 > (_len - _offset)) return false;
         *val = ((uint64_t)_buf[_offset] << 24) | ((uint64_t)_buf[_offset + 1] << 16) |
                ((uint64_t)_buf[_offset + 2] << 8) | _buf[_offset + 3];
         _offset += 4;
         return true;
     } else if (info == 27) {
-        if (_offset + 8 > _len) return false;
+        if (8 > (_len - _offset)) return false;
         uint64_t v = 0;
         for (int i = 0; i < 8; i++) {
             v = (v << 8) | _buf[_offset++];
@@ -181,7 +182,7 @@ bool CborDecoder::readBytes(const uint8_t** data, size_t* len) {
     uint8_t mt;
     uint64_t val;
     if (!readTypeAndValue(&mt, &val) || mt != 2) return false;
-    if (_offset + val > _len) return false;
+    if (val > (_len - _offset)) return false;
     *data = _buf + _offset;
     *len = (size_t)val;
     _offset += (size_t)val;
@@ -189,10 +190,11 @@ bool CborDecoder::readBytes(const uint8_t** data, size_t* len) {
 }
 
 bool CborDecoder::readText(char* outStr, size_t maxLen) {
+    if (!outStr || maxLen == 0) return false;
     uint8_t mt;
     uint64_t val;
     if (!readTypeAndValue(&mt, &val) || mt != 3) return false;
-    if (_offset + val > _len) return false;
+    if (val > (_len - _offset)) return false;
     size_t copyLen = (val < maxLen - 1) ? (size_t)val : (maxLen - 1);
     memcpy(outStr, _buf + _offset, copyLen);
     outStr[copyLen] = '\0';
@@ -226,7 +228,7 @@ bool CborDecoder::skipValueInternal(size_t depth) {
             return true;
         case 2:
         case 3:
-            if (_offset + val > _len) return false;
+            if (val > (_len - _offset)) return false;
             _offset += (size_t)val;
             return true;
         case 4: // Array

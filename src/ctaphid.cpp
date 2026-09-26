@@ -36,10 +36,14 @@ const size_t fido_hid_report_descriptor_len = sizeof(fido_hid_report_descriptor)
 // Static custom USB HID Device
 static USBHID HID;
 
-#define CTAPHID_QUEUE_DEPTH 8
+// Deep enough for a whole max-size message (1 init + 35 continuation packets for 2048 bytes):
+// the TinyUSB task keeps delivering while loop() is blocked (banner delays, PIN hashing), and a
+// full queue drops packets, which the host sees as INVALID_SEQ or a timeout.
+#define CTAPHID_QUEUE_DEPTH 40
 static uint8_t s_rxQueue[CTAPHID_QUEUE_DEPTH][CTAPHID_PACKET_SIZE];
 static volatile uint8_t s_rxHead = 0;
 static volatile uint8_t s_rxTail = 0;
+static volatile uint32_t s_rxDropped = 0;   // packets lost to a full queue (reported by `diag`)
 
 class FidoHidDevice : public USBHIDDevice {
 public:
@@ -71,6 +75,8 @@ public:
                 memcpy(s_rxQueue[s_rxHead], buffer, (len > 64) ? 64 : len);
             }
             s_rxHead = nextHead;
+        } else {
+            s_rxDropped = s_rxDropped + 1;   // only the TinyUSB task writes it
         }
     }
 
@@ -348,4 +354,8 @@ bool CtapHid::sendError(uint32_t cid, uint8_t errorCode) {
 
 bool CtapHid::sendKeepAlive(uint32_t cid, uint8_t status) {
     return sendResponse(cid, CTAPHID_CMD_KEEPALIVE, &status, 1);
+}
+
+uint32_t CtapHid::droppedPackets() const {
+    return s_rxDropped;
 }

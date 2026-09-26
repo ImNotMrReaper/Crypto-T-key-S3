@@ -13,6 +13,7 @@
 #include "rgb_status.h"
 #include "ui_theme.h"
 #include "crypto_coins.h"
+#include "device_clock.h"
 #include "USB.h"
 
 static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
@@ -33,17 +34,11 @@ uint16_t getCoinColor565(const char* symbol) {
     return rgb565(c.r, c.g, c.b);
 }
 
-// Home accent: the theme colour, or a slowly turning hue for the rainbow effect
+// Home accent: follows theme colour and real-time animation effects (rainbow sync)
 static uint16_t homeAccent565() {
-    if (homeTheme.fx == HOME_FX_RAINBOW) {
-        uint8_t h = (uint8_t)(millis() / 60);
-        uint8_t r, g, b, x = h % 85 * 3;
-        if (h < 85) { r = 255 - x; g = x; b = 0; }
-        else if (h < 170) { r = 0; g = 255 - x; b = x; }
-        else { r = x; g = 0; b = 255 - x; }
-        return rgb565(r, g, b);
-    }
-    uint8_t r = homeTheme.r, g = homeTheme.g, b = homeTheme.b;
+    uint8_t r, g, b;
+    float level;
+    homeTheme.currentFrame(millis(), r, g, b, level);
     readable(r, g, b);
     return rgb565(r, g, b);
 }
@@ -73,10 +68,34 @@ static inline uint16_t dimColor565(uint16_t c, float factor) {
 void UiEngine::begin(TFT_eSPI* tft) {
     _tft = tft;
     if (_tft) {
-        _sprite = new TFT_eSprite(_tft);
-        _sprite->createSprite(DISP_W, DISP_H);
-        _sprite->setRotation(DISP_ROTATION);
+        _sprite = new (std::nothrow) TFT_eSprite(_tft);
+        if (_sprite) {
+            void* buf = _sprite->createSprite(DISP_W, DISP_H);
+            if (!buf) {
+                delete _sprite;
+                _sprite = nullptr;
+                renderAllocError();
+                return;
+            }
+            _sprite->setRotation(DISP_ROTATION);
+        } else {
+            renderAllocError();
+        }
     }
+}
+
+void UiEngine::renderAllocError() {
+    if (!_tft) return;
+    _tft->fillScreen(COLOR_BG);
+    _tft->setTextDatum(MC_DATUM);
+    _tft->setTextColor(COLOR_CRIMSON_PANIC, COLOR_BG);
+    _tft->drawString("MEM ERR: SPRITE", DISP_W / 2, DISP_H / 2, 2);
+}
+
+bool UiEngine::checkSprite() {
+    if (_sprite) return true;
+    renderAllocError();
+    return false;
 }
 
 void UiEngine::drawHeader(const char* title, uint16_t headerColor, uint16_t textColor) {
@@ -149,7 +168,7 @@ void UiEngine::formatRpDomain(const char* rpId, char* outBuf, size_t maxLen) {
 }
 
 void UiEngine::renderBootSplash() {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     drawHeader("CRYPTO TKEY S3", COLOR_HEADER_BG, COLOR_NEON_CYAN);
@@ -166,18 +185,91 @@ void UiEngine::renderBootSplash() {
     _sprite->pushSprite(0, 0);
 }
 
-void UiEngine::renderHomeDashboard(uint32_t uptimeSec, const char* wifiSsid, float totalPortfolioUsd, bool isFlipped) {
+void UiEngine::drawWallpaper(HomeWallpaper wp, uint16_t accent) {
     if (!_sprite) return;
-    _sprite->fillSprite(COLOR_BG);
+    _sprite->fillRect(0, 14, DISP_W, 52, COLOR_BG);
+    if (wp == WALLPAPER_NONE) {
+        return;
+    }
+    if (wp == WALLPAPER_GRID) {
+        uint16_t gridColor = dimColor565(accent, 0.08f);
+        for (int x = 8; x < DISP_W; x += 16) {
+            for (int y = 18; y < 66; y += 16) {
+                _sprite->drawPixel(x, y, gridColor);
+            }
+        }
+    } else if (wp == WALLPAPER_AURORA) {
+        for (int y = 14; y < 66; y++) {
+            float factor = 0.12f * sinf((float)(y - 14) * 3.14159f / 52.0f);
+            uint16_t rowCol = dimColor565(accent, factor);
+            if (rowCol != 0) {
+                _sprite->drawFastHLine(0, y, DISP_W, rowCol);
+            }
+        }
+    } else if (wp == WALLPAPER_STARFIELD) {
+        uint32_t seed = 0x57A8F1E1;
+        for (int i = 0; i < 28; i++) {
+            seed = seed * 1664525u + 1013904223u;
+            int sx = 4 + ((seed >> 16) % (DISP_W - 8));
+            seed = seed * 1664525u + 1013904223u;
+            int sy = 16 + ((seed >> 16) % 48);
+            uint8_t bright = ((seed >> 24) % 3) + 1;
+            uint16_t starCol = dimColor565(accent, bright * 0.06f);
+            _sprite->drawPixel(sx, sy, starCol);
+        }
+    }
+}
+
+// n-th enabled coin in registry order (nullptr if out of range)
+static const CoinAsset* nthEnabledCoin(int n) {
+    if (n < 0) return nullptr;
+    for (int i = 0; i < CryptoCoinRegistry::getCoinCount(); i++) {
+        const CoinAsset* c = CryptoCoinRegistry::getCoinByIndex(i);
+        if (c && c->enabled && n-- == 0) return c;
+    }
+    return nullptr;
+}
+
+void UiEngine::renderHomeDashboard(uint32_t uptimeSec, const char* wifiSsid, float totalPortfolioUsd, bool isFlipped) {
+    if (!checkSprite()) return;
     uint16_t accent = homeAccent565();
     uint16_t tint = dimColor565(accent, 0.2f);
+
+    _sprite->fillSprite(COLOR_BG);
+    drawWallpaper(homeTheme.activeWallpaper(), accent);
 
     // Header: name + live link / temperature status
     _sprite->fillRect(0, 0, DISP_W, 13, tint);
     _sprite->drawFastHLine(0, 13, DISP_W, accent);
+
+    // Left: Key Name (max 16 chars)
     _sprite->setTextDatum(TL_DATUM);
     _sprite->setTextColor(accent, tint);
-    _sprite->drawString("T-KEY", 4, 3, 1);
+    const char* keyName = homeTheme.activeKeyName();
+    char cleanName[20];
+    if (strlen(keyName) > 9) {
+        strncpy(cleanName, keyName, 7);
+        cleanName[7] = '.';
+        cleanName[8] = '.';
+        cleanName[9] = '\0';
+    } else {
+        strncpy(cleanName, keyName, sizeof(cleanName) - 1);
+        cleanName[sizeof(cleanName) - 1] = '\0';
+    }
+    _sprite->drawString(cleanName, 4, 3, 1);
+
+    // Center: Clock
+    char clockText[8] = "--:--";
+    struct tm localClock;
+    bool hasClock = DeviceClock::localTime(&localClock);
+    if (hasClock) {
+        snprintf(clockText, sizeof(clockText), "%02d:%02d", localClock.tm_hour, localClock.tm_min);
+    }
+    _sprite->setTextDatum(MC_DATUM);
+    _sprite->setTextColor(0xFFFF, tint);
+    _sprite->drawString(clockText, DISP_W / 2, 6, 1);
+
+    // Right: Link / Temp
     char st[24];
     bool online = wifiSsid && wifiSsid[0] && strcmp(wifiSsid, "AIRGAP") != 0 && strcmp(wifiSsid, "DISCONNECTED") != 0;
     const char* link = (bool)USB ? "USB" : online ? "WI-FI" : "WALL";
@@ -186,54 +278,128 @@ void UiEngine::renderHomeDashboard(uint32_t uptimeSec, const char* wifiSsid, flo
     _sprite->setTextColor(0xC618, tint);
     _sprite->drawString(st, DISP_W - 4, 3, 1);
 
-    // Portfolio value, or READY when nothing is held yet
-    int coins = 0, priced = 0;
-    float weighted = 0;
+    // Count enabled coins & live prices
+    int enabledCount = 0;
+    int pricedCount = 0;
+    float weightedChange = 0.0f;
     for (int i = 0; i < CryptoCoinRegistry::getCoinCount(); i++) {
         const CoinAsset* c = CryptoCoinRegistry::getCoinByIndex(i);
-        if (!c->enabled) continue;
-        coins++;
-        if (c->balance > 0 && CryptoCoinRegistry::hasLivePrice(c)) {
-            priced++;
-            if (totalPortfolioUsd > 0) weighted += c->change24h * (c->balance * c->priceUsd) / totalPortfolioUsd;
+        if (!c || !c->enabled) continue;
+        enabledCount++;
+        if (CryptoCoinRegistry::hasLivePrice(c)) {
+            pricedCount++;
+            if (c->balance > 0 && totalPortfolioUsd > 0) {
+                weightedChange += c->change24h * (c->balance * c->priceUsd) / totalPortfolioUsd;
+            }
         }
     }
-    char coinsTxt[12], upTxt[16];
-    snprintf(coinsTxt, sizeof(coinsTxt), "%d COIN%s", coins, coins == 1 ? "" : "S");
-    uint32_t m = uptimeSec / 60;
-    if (m >= 60) snprintf(upTxt, sizeof(upTxt), "UP %luH%02luM", m / 60, m % 60);
-    else snprintf(upTxt, sizeof(upTxt), "UP %luM", (unsigned long)m);
 
-    // Left: the headline number (or READY) and what it means; right: coins / uptime
-    _sprite->setTextDatum(TL_DATUM);
-    const char* rightTxt = upTxt;
-    if (totalPortfolioUsd > 0 && priced) {
+    uint32_t nowMs = millis();
+    int activeTickerIdx = getTickerCoinIndex(nowMs, enabledCount);
+    // The n-th enabled coin, looked up in the registry: no fixed-size copy (a 16-entry array
+    // read past its end with 88 coins enabled and crash-looped the key, 2026-09-25)
+    const CoinAsset* tickerCoin = nthEnabledCoin(activeTickerIdx);
+
+    if (totalPortfolioUsd > 0 && pricedCount > 0) {
+        // ── Case B: Portfolio holds coins ──
         char v[24];
         formatUsd(totalPortfolioUsd, v, sizeof(v), totalPortfolioUsd < 100000);
+        _sprite->setTextDatum(TL_DATUM);
         _sprite->setTextColor(0xFFFF, COLOR_BG);
-        _sprite->drawString(v, 4, 19, _sprite->textWidth(v, 4) <= DISP_W - 8 ? 4 : 2);
-        char ch[16];
-        snprintf(ch, sizeof(ch), "%s%.2f%% 24H", weighted >= 0 ? "+" : "", weighted);
-        _sprite->setTextColor(weighted >= 0 ? COLOR_SIGNAL_GREEN : COLOR_CRIMSON_PANIC, COLOR_BG);
-        _sprite->drawString(ch, 4, 46, 1);
-        rightTxt = coinsTxt;
-    } else {
-        _sprite->setTextColor(0xFFFF, COLOR_BG);
-        _sprite->drawString("READY", 4, 19, 4);
-        _sprite->setTextColor(0x8410, COLOR_BG);
-        _sprite->drawString(coinsTxt, 4, 46, 1);
-    }
-    _sprite->setTextDatum(TR_DATUM);
-    _sprite->setTextColor(0x8410, COLOR_BG);
-    _sprite->drawString(rightTxt, DISP_W - 4, 46, 1);
+        _sprite->drawString(v, 4, 17, _sprite->textWidth(v, 4) <= DISP_W - 8 ? 4 : 2);
 
-    // One dot per selected coin, in its brand colour
-    int x = 5;
-    for (int i = 0; i < CryptoCoinRegistry::getCoinCount() && x < DISP_W - 4; i++) {
-        const CoinAsset* c = CryptoCoinRegistry::getCoinByIndex(i);
-        if (!c->enabled) continue;
-        _sprite->fillCircle(x, 59, 2, getCoinColor565(c->symbol));
-        x += 7;
+        char ch[16];
+        snprintf(ch, sizeof(ch), "%s%.2f%% 24H", weightedChange >= 0 ? "+" : "", weightedChange);
+        _sprite->setTextColor(weightedChange >= 0 ? COLOR_SIGNAL_GREEN : COLOR_CRIMSON_PANIC, COLOR_BG);
+        _sprite->drawString(ch, 4, 38, 1);
+
+        char coinsTxt[16];
+        snprintf(coinsTxt, sizeof(coinsTxt), "%d COIN%s", enabledCount, enabledCount == 1 ? "" : "S");
+        _sprite->setTextDatum(TR_DATUM);
+        _sprite->setTextColor(0x8410, COLOR_BG);
+        _sprite->drawString(coinsTxt, DISP_W - 4, 38, 1);
+
+        // Ticker on the line below
+        _sprite->setTextDatum(TL_DATUM);
+        if (pricedCount == 0) {
+            _sprite->setTextColor(0x8410, COLOR_BG);
+            _sprite->drawString("WAITING FOR PRICES", 4, 50, 1);
+        } else if (tickerCoin) {
+            char pStr[24];
+            formatPrice(tickerCoin->priceUsd, pStr, sizeof(pStr));
+            char pctStr[16];
+            snprintf(pctStr, sizeof(pctStr), "%s%.2f%%", tickerCoin->change24h >= 0 ? "+" : "", tickerCoin->change24h);
+
+            uint16_t symColor = getCoinColor565(tickerCoin->symbol);
+            _sprite->setTextColor(symColor, COLOR_BG);
+            _sprite->drawString(tickerCoin->symbol, 4, 50, 1);
+            int symW = _sprite->textWidth(tickerCoin->symbol, 1);
+
+            _sprite->setTextColor(0xFFFF, COLOR_BG);
+            _sprite->drawString(pStr, 4 + symW + 6, 50, 1);
+            int pW = _sprite->textWidth(pStr, 1);
+
+            uint16_t chgColor = (tickerCoin->change24h >= 0) ? COLOR_SIGNAL_GREEN : COLOR_CRIMSON_PANIC;
+            _sprite->setTextColor(chgColor, COLOR_BG);
+            _sprite->drawString(pctStr, 4 + symW + 6 + pW + 6, 50, 1);
+        }
+    } else {
+        // ── Case A: Portfolio total is 0 (or no balance held yet) ──
+        // Never show 'READY'!
+        char dateStr[24] = "T-KEY S3";
+        if (hasClock) {
+            formatDate(&localClock, dateStr, sizeof(dateStr));
+        }
+        _sprite->setTextDatum(TL_DATUM);
+        _sprite->setTextColor(accent, COLOR_BG);
+        _sprite->drawString(dateStr, 4, 18, 2);
+
+        char upTxt[16];
+        uint32_t m = uptimeSec / 60;
+        if (m >= 60) snprintf(upTxt, sizeof(upTxt), "UP %luH%02luM", m / 60, m % 60);
+        else snprintf(upTxt, sizeof(upTxt), "UP %luM", (unsigned long)m);
+        _sprite->setTextDatum(TR_DATUM);
+        _sprite->setTextColor(0x8410, COLOR_BG);
+        _sprite->drawString(upTxt, DISP_W - 4, 20, 1);
+
+        // Live price ticker at y: 38
+        _sprite->setTextDatum(TL_DATUM);
+        if (pricedCount == 0) {
+            _sprite->setTextColor(0xAD55, COLOR_BG);
+            _sprite->drawString("WAITING FOR PRICES", 4, 38, 2);
+        } else if (tickerCoin) {
+            char pStr[24];
+            formatPrice(tickerCoin->priceUsd, pStr, sizeof(pStr));
+            char pctStr[16];
+            snprintf(pctStr, sizeof(pctStr), "%s%.2f%%", tickerCoin->change24h >= 0 ? "+" : "", tickerCoin->change24h);
+
+            uint16_t symColor = getCoinColor565(tickerCoin->symbol);
+            _sprite->setTextColor(symColor, COLOR_BG);
+            _sprite->drawString(tickerCoin->symbol, 4, 36, 2);
+            int symW = _sprite->textWidth(tickerCoin->symbol, 2);
+
+            _sprite->setTextColor(0xFFFF, COLOR_BG);
+            _sprite->drawString(pStr, 4 + symW + 6, 36, 2);
+            int pW = _sprite->textWidth(pStr, 2);
+
+            uint16_t chgColor = (tickerCoin->change24h >= 0) ? COLOR_SIGNAL_GREEN : COLOR_CRIMSON_PANIC;
+            _sprite->setTextColor(chgColor, COLOR_BG);
+            _sprite->drawString(pctStr, 4 + symW + 6 + pW + 6, 38, 1);
+        }
+
+        // Coin indicator dots along y: 56
+        int x = 5;
+        for (int i = 0; i < enabledCount && x < DISP_W - 4; i++) {
+            const CoinAsset* dotCoin = nthEnabledCoin(i);
+            if (!dotCoin) break;
+            uint16_t dotCol = getCoinColor565(dotCoin->symbol);
+            if (i == activeTickerIdx) {
+                _sprite->fillCircle(x, 56, 3, dotCol);
+            } else {
+                _sprite->fillCircle(x, 56, 2, dotCol);
+            }
+            x += 8;
+        }
     }
 
     drawFooter("TAP:KEY 2X:FLIP HOLD:OFF", 0, 0.0f);
@@ -242,7 +408,7 @@ void UiEngine::renderHomeDashboard(uint32_t uptimeSec, const char* wifiSsid, flo
 }
 
 void UiEngine::renderPasskeyHub(bool authPending, const char* rpId, float progress0to1) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     if (!authPending) {
@@ -286,7 +452,7 @@ void UiEngine::renderReadyDashboard(uint32_t uptimeSec, bool fidoReady, bool vau
 }
 
 void UiEngine::renderPinScreen(const char* currentDigits, int pinLength, int activeIndex, int currentVal, uint8_t holdStage) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     drawHeader("MASTER PIN ENTRY", 0x3000, COLOR_CYBER_GOLD);
@@ -337,7 +503,7 @@ void UiEngine::renderPinScreen(const char* currentDigits, int pinLength, int act
 }
 
 void UiEngine::renderFidoPrompt(const char* rpId, float progress0to1) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     drawHeader("WEBAUTHN // PASSKEY", COLOR_HEADER_BG, COLOR_SIGNAL_GREEN);
@@ -358,7 +524,7 @@ void UiEngine::renderFidoPrompt(const char* rpId, float progress0to1) {
 }
 
 void UiEngine::renderCryptoSignPrompt(const char* chain, const char* recipient, const char* amount) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     uint16_t chainColor = getCoinColor565(chain);
@@ -421,7 +587,7 @@ static void drawQrToSprite(esp_qrcode_handle_t qr) {
 
 void UiEngine::renderReceiveScreen(const char* symbol, const char* network, const char* address,
                                    const char* qrText, const char* hint) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
     uint16_t coinColor = getCoinColor565(symbol);
 
@@ -481,7 +647,7 @@ void UiEngine::renderReceiveScreen(const char* symbol, const char* network, cons
 }
 
 void UiEngine::renderPortalScreen(const char* ssid, const char* pass, const char* qrText, const char* hint) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
     s_qrSprite = _sprite;
     s_qrBox = DISP_H;
@@ -491,7 +657,12 @@ void UiEngine::renderPortalScreen(const char* ssid, const char* pass, const char
     cfg.max_qrcode_version = 5;
     cfg.qrcode_ecc_level = ESP_QRCODE_ECC_LOW;
     esp_qrcode_generate(&cfg, qrText);
-    if (!s_qrDrawn) _sprite->drawRect(0, 0, DISP_H, DISP_H, 0x4208);
+    if (!s_qrDrawn) {
+        _sprite->drawRect(0, 0, DISP_H, DISP_H, 0x4208);
+        _sprite->setTextDatum(MC_DATUM);
+        _sprite->setTextColor(0x8410, COLOR_BG);
+        _sprite->drawString("QR ERROR", DISP_H / 2, DISP_H / 2, 1);
+    }
 
     const int x0 = DISP_H + 3;
     _sprite->fillRoundRect(x0, 1, 44, 11, 2, COLOR_NEON_CYAN);
@@ -509,13 +680,13 @@ void UiEngine::renderPortalScreen(const char* ssid, const char* pass, const char
     _sprite->setTextColor(COLOR_CYBER_GOLD, COLOR_BG);
     _sprite->drawString(pass, x0, 45, 1);
     _sprite->setTextColor(0x8410, COLOR_BG);
-    _sprite->drawString("192.168.4.1", x0, 58, 1);
+    _sprite->drawString("10.77.0.1", x0, 58, 1);
     _sprite->drawString(hint ? hint : "", x0, 70, 1);
     _sprite->pushSprite(0, 0);
 }
 
 void UiEngine::renderWalletScreen(const char* coinName, const char* symbol, const char* address, const char* path) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     // Determine coin branding color (matching master brand palette)
@@ -576,7 +747,7 @@ void UiEngine::renderWalletScreen(const char* coinName, const char* symbol, cons
 }
 
 void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float balance, float priceUsd, float change24h, int activeIdx, int totalActive, float totalPortfolioUsd, bool isLive) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     // ── Brand Colors: exact RGB565 derived from master brand palette ─────────
@@ -698,7 +869,7 @@ void UiEngine::renderPortfolioCard(const char* symbol, const char* name, float b
 }
 
 void UiEngine::renderSeedWordsView(int wordNum, int totalWords, const char* word) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     char hdr[32];
@@ -720,7 +891,7 @@ void UiEngine::renderSeedWordsView(int wordNum, int totalWords, const char* word
 }
 
 void UiEngine::renderSeedBackupScreen(int wordNum, int totalWords, const char* word) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     char hdr[32];
@@ -742,7 +913,7 @@ void UiEngine::renderSeedBackupScreen(int wordNum, int totalWords, const char* w
 }
 
 void UiEngine::renderEntropyGatherScreen(int currentSamples, int requiredSamples) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     drawHeader("SEED GENERATOR", 0x3000, COLOR_CYBER_GOLD);
@@ -764,7 +935,7 @@ void UiEngine::renderEntropyGatherScreen(int currentSamples, int requiredSamples
 }
 
 void UiEngine::renderAirGapScreen(const char* psbtFile, const char* summary, bool readyToSign) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     drawHeader("AIR-GAP SIGNER", 0x0010, 0x541F);
@@ -781,8 +952,60 @@ void UiEngine::renderAirGapScreen(const char* psbtFile, const char* summary, boo
     _sprite->pushSprite(0, 0);
 }
 
+void UiEngine::renderPsbtOutput(int page, int pages, const char* address, const char* amount) {
+    if (!checkSprite()) return;
+    _sprite->fillSprite(COLOR_BG);
+    char title[24];
+    snprintf(title, sizeof(title), "SEND %d/%d  CHECK ADDR", page, pages);
+    drawHeader(title, 0x0010, 0x541F);
+
+    // Whole address, 25 characters per line (font 1 is 6 px wide): P2TR/P2WSH are 62
+    _sprite->fillRoundRect(2, 16, DISP_W - 4, 32, 3, 0x0842);
+    _sprite->setTextDatum(TL_DATUM);
+    _sprite->setTextColor(0xFFFF, 0x0842);
+    size_t len = address ? strlen(address) : 0;
+    for (int line = 0; line < 3 && (size_t)line * 25 < len; line++) {
+        char buf[26];
+        snprintf(buf, sizeof(buf), "%.25s", address + line * 25);
+        _sprite->drawString(buf, 5, 18 + line * 10, 1);
+    }
+    if (len > 75) {   // never silently cut an address: flag it instead
+        _sprite->setTextColor(COLOR_CRIMSON_PANIC, 0x0842);
+        _sprite->drawString("...ADDRESS TOO LONG", 5, 38, 1);
+    }
+
+    _sprite->setTextColor(COLOR_SIGNAL_GREEN, COLOR_BG);
+    _sprite->drawString(amount, 4, 54, 1);
+    drawFooter("TAP:NEXT  2X:EXIT", 0, 0.0f);
+    _sprite->pushSprite(0, 0);
+}
+
+void UiEngine::renderPsbtSummary(const char* sending, const char* change, const char* fee, int foreignInputs) {
+    if (!checkSprite()) return;
+    _sprite->fillSprite(COLOR_BG);
+    drawHeader("REVIEW TOTALS", 0x0010, 0x541F);
+    _sprite->setTextDatum(TL_DATUM);
+    _sprite->setTextColor(COLOR_SIGNAL_GREEN, COLOR_BG);
+    _sprite->drawString("Send", 4, 17, 1);
+    _sprite->drawString(sending, 40, 17, 1);
+    _sprite->setTextColor(0xDEFB, COLOR_BG);
+    _sprite->drawString("Change", 4, 29, 1);
+    _sprite->drawString(change, 40, 29, 1);
+    _sprite->setTextColor(COLOR_CYBER_GOLD, COLOR_BG);
+    _sprite->drawString("Fee", 4, 41, 1);
+    _sprite->drawString(fee, 40, 41, 1);
+    if (foreignInputs > 0) {   // someone else's inputs are in this transaction (coinjoin/payjoin)
+        char warn[32];
+        snprintf(warn, sizeof(warn), "+%d INPUT(S) NOT YOURS", foreignInputs);
+        _sprite->setTextColor(COLOR_CRIMSON_PANIC, COLOR_BG);
+        _sprite->drawString(warn, 4, 53, 1);
+    }
+    drawFooter("HOLD:SIGN TAP:BACK", 0, 0.0f);
+    _sprite->pushSprite(0, 0);
+}
+
 void UiEngine::renderAirGapPsbt(const char* fileName, const char* recipient, const char* amountBtc, const char* feeStr, bool readyToSign) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     drawHeader("BIP-174 PSBT SIGNER", 0x0010, 0x541F);
@@ -824,7 +1047,7 @@ void UiEngine::renderAirGapPsbt(const char* fileName, const char* recipient, con
 }
 
 void UiEngine::renderOobeWizard(uint8_t step, const char* title, const char* detail, const char* hint) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     char hdr[24];
@@ -844,7 +1067,7 @@ void UiEngine::renderOobeWizard(uint8_t step, const char* title, const char* det
 }
 
 void UiEngine::renderSuccessBanner(const char* title, const char* subtitle) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     _sprite->fillRect(0, 0, DISP_W, DISP_H, 0x0340);
@@ -866,7 +1089,7 @@ void UiEngine::renderSuccessBanner(const char* title, const char* subtitle) {
 }
 
 void UiEngine::renderErrorBanner(const char* message) {
-    if (!_sprite) return;
+    if (!checkSprite()) return;
     _sprite->fillSprite(COLOR_BG);
 
     _sprite->fillRect(0, 0, DISP_W, DISP_H, 0x5000);

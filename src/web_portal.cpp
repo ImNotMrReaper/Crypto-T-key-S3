@@ -9,6 +9,7 @@
 #include "crypto_coins.h"
 #include "wifi_manager.h"
 #include "pin_vault.h"
+#include "sd_vault.h"
 #include "ui_theme.h"
 #include <Preferences.h>
 #include <esp_mac.h>
@@ -174,10 +175,12 @@ void WebPortal::begin(CryptoWallet* wallet, WifiManager* wifi, bool isProvisione
     snprintf(_wifiQr, sizeof(_wifiQr), "WIFI:T:WPA;S:%s;P:%s;;", _apSsid, _apPass);
 
     WiFi.mode(WIFI_AP);
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);   // low TX power: less heat, shorter range
-    IPAddress apIP(192, 168, 4, 1);
+    // Keep the captive setup AP off common home-router subnets. A 192.168.4.1 AP
+    // collides with the user's LAN on this workstation and steals its route/DNS.
+    IPAddress apIP(10, 77, 0, 1);
     WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
     WiFi.softAP(_apSsid, _apPass, 6, 0, 2);   // WPA2-PSK, max 2 clients
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);       // low TX power: less heat, shorter range (after AP started)
     delay(100);
 
     _dns = new DNSServer();
@@ -192,6 +195,12 @@ void WebPortal::begin(CryptoWallet* wallet, WifiManager* wifi, bool isProvisione
     _server->on("/api/save", HTTP_POST, [this]() { handleSave(); });
     _server->on("/api/scan", HTTP_GET, [this]() { handleScan(); });
     _server->on("/api/exit", HTTP_POST, [this]() { handleExit(); });
+    _server->on("/api/theme_preview", HTTP_POST, [this]() { handleThemePreview(); });
+    _server->on("/api/sd_backup", HTTP_POST, [this]() { handleSdBackup(); });
+    _server->on("/api/sd_restore", HTTP_POST, [this]() { handleSdRestore(); });
+    _server->on("/api/sd_full_backup", HTTP_POST, [this]() { handleSdFullBackup(); });
+    _server->on("/api/sd_full_restore", HTTP_POST, [this]() { handleSdFullRestore(); });
+    _server->on("/api/sd_erase", HTTP_POST, [this]() { handleSdErase(); });
     for (const char* probe : {"/generate_204", "/gen_204", "/hotspot-detect.html", "/ncsi.txt", "/connecttest.txt"}) {
         _server->on(probe, HTTP_GET, [this]() { handlePage(); });
     }
@@ -199,7 +208,7 @@ void WebPortal::begin(CryptoWallet* wallet, WifiManager* wifi, bool isProvisione
     _server->begin();
 
     _isRunning = true;
-    Serial.printf("[PORTAL] Setup portal on WPA2 SSID %s at http://192.168.4.1 (password on the device screen)\n", _apSsid);
+    Serial.printf("[PORTAL] Setup portal on WPA2 SSID %s at http://10.77.0.1 (password on the device screen)\n", _apSsid);
 }
 
 void WebPortal::update() {
@@ -238,6 +247,16 @@ void WebPortal::startSession() {
     _server->sendHeader("Set-Cookie", String("tk=") + _session + "; Path=/; HttpOnly; SameSite=Strict");
 }
 
+#ifdef TKEY_TEST_SERIAL_TOUCH
+void WebPortal::testSession(const char** session, const char** csrf) {
+    randomHex(_session, 16);
+    randomHex(_csrf, 16);
+    _sessionSeenMs = millis();
+    *session = _session;
+    *csrf = _csrf;
+}
+#endif
+
 bool WebPortal::isAuthenticated() {
     if (!_session[0] || millis() - _sessionSeenMs > SESSION_IDLE_MS) return false;
     String cookie = _server->header("Cookie");
@@ -265,7 +284,7 @@ void WebPortal::sendError(int code, const char* msg) {
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 void WebPortal::handleNotFound() {
-    _server->sendHeader("Location", "http://192.168.4.1/", true);
+    _server->sendHeader("Location", "http://10.77.0.1/", true);
     _server->send(302, "text/plain", "");
 }
 
@@ -303,13 +322,40 @@ void WebPortal::handleState() {
     o += PinVault::hasDuress() ? "true" : "false";
     o += ",\"hasSeed\":";
     o += (_wallet && _wallet->hasSeed()) ? "true" : "false";
+    o += ",\"key_name\":\"" + jsonEsc(homeTheme.activeKeyName()) + "\"";
+    o += ",\"wallpaper\":" + String((int)homeTheme.wallpaper);
     char hex[8];
-    snprintf(hex, sizeof(hex), "%06lx", (unsigned long)homeTheme.rgb());
+    snprintf(hex, sizeof(hex), "%06lx", (unsigned long)homeTheme.savedRgb());
     o += ",\"theme\":{\"rgb\":\"";
     o += hex;
     o += "\",\"fx\":";
     o += (int)homeTheme.fx;
-    o += "},\"wifi\":[";
+    o += ",\"speed\":";
+    o += (int)homeTheme.speed;
+    o += ",\"brightness\":";
+    o += (int)homeTheme.brightness;
+    o += ",\"activeCustom\":";
+    o += (int)homeTheme.activeCustomMode;
+    o += ",\"customModes\":[";
+    for (uint8_t i = 0; i < homeTheme.customCount && i < MAX_CUSTOM_MODES; i++) {
+        if (i) o += ",";
+        o += "{\"name\":\"" + jsonEsc(homeTheme.customModes[i].name) + "\",\"fx\":";
+        o += (int)homeTheme.customModes[i].fx;
+        o += ",\"speed\":";
+        o += (int)homeTheme.customModes[i].speed;
+        o += ",\"colors\":[";
+        for (uint8_t ci = 0; ci < homeTheme.customModes[i].colorCount; ci++) {
+            if (ci) o += ",";
+            char chex[10];   // "rrggbb" with quotes is 8 chars + NUL
+            snprintf(chex, sizeof(chex), "\"%02x%02x%02x\"",
+                     homeTheme.customModes[i].colors[ci][0],
+                     homeTheme.customModes[i].colors[ci][1],
+                     homeTheme.customModes[i].colors[ci][2]);
+            o += chex;
+        }
+        o += "]}";
+    }
+    o += "]},\"wifi\":[";
     for (int i = 0; _wifi && i < _wifi->getSavedCount(); i++) {
         if (i) o += ",";
         o += "\"" + jsonEsc(_wifi->getNetwork(i)->ssid) + "\"";
@@ -330,7 +376,27 @@ void WebPortal::handleState() {
                  c->meta->r, c->meta->g, c->meta->b, c->enabled ? 1 : 0);
         o += row;
     }
-    o += "]}";
+    EmergencyPolicy pol = EmergencyPolicyStore::load();
+    o += "],\"policy\":{";
+    o += "\"duress\":\"";
+    o += EmergencyPolicyStore::actionName(pol.action[TRIG_DURESS_PIN]);
+    o += "\",\"panic\":\"";
+    o += EmergencyPolicyStore::actionName(pol.action[TRIG_PANIC_HOLD]);
+    o += "\",\"lockout\":\"";
+    o += EmergencyPolicyStore::actionName(pol.action[TRIG_PIN_LOCKOUT]);
+    o += "\",\"countdown\":";
+    o += String((int)pol.panicCountdownS);
+    o += "},\"sd\":{";
+    bool sdMounted = sdVault.isMounted() || sdVault.begin();
+    bool sdHasBackup = sdMounted && sdVault.hasSeedBackup();
+    bool sdHasFull = sdMounted && sdVault.hasFullBackup();
+    o += "\"mounted\":";
+    o += sdMounted ? "true" : "false";
+    o += ",\"hasBackup\":";
+    o += sdHasBackup ? "true" : "false";
+    o += ",\"hasFullBackup\":";
+    o += sdHasFull ? "true" : "false";
+    o += "}}";
     sendJson(200, o);
 }
 
@@ -386,7 +452,67 @@ void WebPortal::handleExit() {
         sendError(400, "Finish the first setup before leaving.");
         return;
     }
+    if (_setupRequired) {
+        sendError(400, "New firmware was installed: review and save the settings once to finish setup.");
+        return;
+    }
+    homeTheme.clearPreview();
     _exitRequested = true;
+    sendJson(200, "{\"ok\":true}");
+}
+
+void WebPortal::handleThemePreview() {
+    if (!isAuthenticated()) {
+        sendError(401, "Please log in first.");
+        return;
+    }
+    // A revert only restores the saved theme, so it may also carry the CSRF token in the body:
+    // navigator.sendBeacon (used when the page closes) can't set request headers.
+    bool revert = _server->hasArg("revert") && _server->arg("revert").length();
+    bool bodyToken = revert && _csrf[0] && ctEqualStr(_server->arg("csrf").c_str(), _csrf);
+    if (!checkCsrf() && !bodyToken) {
+        sendError(403, "Invalid session. Reload the setup page.");
+        return;
+    }
+
+    if (revert) {
+        homeTheme.clearPreview();
+        sendJson(200, "{\"ok\":true,\"reverted\":true}");
+        return;
+    }
+
+    String rgb = _server->arg("theme_rgb");
+    if (rgb.length() != 6) {
+        sendError(400, "Invalid hex colour.");
+        return;
+    }
+
+    for (int i = 0; i < 6; i++) {
+        char c = rgb[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+            sendError(400, "Invalid hex character.");
+            return;
+        }
+    }
+
+    int fx = _server->hasArg("theme_fx") ? _server->arg("theme_fx").toInt() : (int)homeTheme.fx;
+    if (fx < 0 || fx >= HOME_FX_COUNT) fx = (int)HOME_FX_BREATHE;
+
+    int speed = _server->hasArg("theme_speed") ? _server->arg("theme_speed").toInt() : (int)homeTheme.speed;
+    if (speed < 1 || speed > 5) speed = 3;
+
+    int bright = _server->hasArg("theme_bright") ? _server->arg("theme_bright").toInt() : (int)homeTheme.brightness;
+    if (bright < 0 || bright > 2) bright = 1;
+
+    int wp = _server->hasArg("theme_wallpaper") ? _server->arg("theme_wallpaper").toInt() : (int)homeTheme.wallpaper;
+    if (wp < 0 || wp >= WALLPAPER_COUNT) wp = 0;
+
+    uint32_t v = strtoul(rgb.c_str(), nullptr, 16);
+    uint8_t r = (v >> 16) & 0xFF;
+    uint8_t g = (v >> 8) & 0xFF;
+    uint8_t b = v & 0xFF;
+
+    homeTheme.setPreview(r, g, b, (HomeEffect)fx, (uint8_t)speed, (LedBrightness)bright, millis(), (HomeWallpaper)wp);
     sendJson(200, "{\"ok\":true}");
 }
 
@@ -408,6 +534,38 @@ void WebPortal::handleSave() {
     else if (pw.length() && (pw.length() < SETUP_PW_MIN_LEN || pw.length() > 128)) err = "The setup password needs at least 8 characters.";
     else if (needPw && !pw.length()) err = "Choose a setup password.";
 
+    String polDuress = _server->arg("pol_duress");
+    String polPanic = _server->arg("pol_panic");
+    String polLockout = _server->arg("pol_lockout");
+    String polCountdown = _server->arg("pol_countdown");
+    EmergencyPolicy newPol = EmergencyPolicyStore::load();
+    bool policySpecified = false;
+
+    if (!err && (polDuress.length() || polPanic.length() || polLockout.length() || polCountdown.length())) {
+        policySpecified = true;
+        EmergencyAction aDuress, aPanic, aLockout;
+        if (!EmergencyPolicyStore::parseAction(polDuress.c_str(), &aDuress) ||
+            !EmergencyPolicyStore::isAllowed(TRIG_DURESS_PIN, aDuress)) {
+            err = "Invalid duress emergency action.";
+        } else if (!EmergencyPolicyStore::parseAction(polPanic.c_str(), &aPanic) ||
+                   !EmergencyPolicyStore::isAllowed(TRIG_PANIC_HOLD, aPanic)) {
+            err = "Invalid panic emergency action.";
+        } else if (!EmergencyPolicyStore::parseAction(polLockout.c_str(), &aLockout) ||
+                   !EmergencyPolicyStore::isAllowed(TRIG_PIN_LOCKOUT, aLockout)) {
+            err = "Invalid lockout emergency action.";
+        } else if (!allDigits(polCountdown) || polCountdown.toInt() < 0 || polCountdown.toInt() > PANIC_COUNTDOWN_MAX_S) {
+            err = "Invalid panic countdown seconds (0 to 10).";
+        } else {
+            newPol.action[TRIG_DURESS_PIN] = aDuress;
+            newPol.action[TRIG_PANIC_HOLD] = aPanic;
+            newPol.action[TRIG_PIN_LOCKOUT] = aLockout;
+            newPol.panicCountdownS = (uint8_t)polCountdown.toInt();
+            if (!EmergencyPolicyStore::isValid(newPol)) {
+                err = "Invalid emergency policy configuration.";
+            }
+        }
+    }
+
     String coins = "," + _server->arg("coins") + ",";
     int selected = 0;
     for (int i = 0; i < CryptoCoinRegistry::getCoinCount(); i++) {
@@ -417,7 +575,26 @@ void WebPortal::handleSave() {
 
     String rgb = _server->arg("theme_rgb");
     int fx = _server->arg("theme_fx").toInt();
-    if (!err && (rgb.length() != 6 || fx < HOME_FX_SOLID || fx > HOME_FX_RAINBOW)) err = "Invalid home theme.";
+    int speed = _server->hasArg("theme_speed") ? _server->arg("theme_speed").toInt() : 3;
+    int bright = _server->hasArg("theme_bright") ? _server->arg("theme_bright").toInt() : 1;
+    int activeCustom = _server->hasArg("theme_custom_idx") ? _server->arg("theme_custom_idx").toInt() : -1;
+    int wp = _server->hasArg("theme_wallpaper") ? _server->arg("theme_wallpaper").toInt() : (int)homeTheme.wallpaper;
+    if (wp < 0 || wp >= WALLPAPER_COUNT) wp = 0;
+
+    char validatedName[17];
+    strncpy(validatedName, homeTheme.keyName, sizeof(validatedName) - 1);
+    validatedName[sizeof(validatedName) - 1] = '\0';
+    if (_server->hasArg("key_name")) {
+        String keyName = _server->arg("key_name");
+        if (!HomeTheme::validateKeyName(keyName.c_str(), validatedName, sizeof(validatedName))) {
+            err = "Invalid key name (max 16 printable characters).";
+        }
+    }
+
+    if (!err && (rgb.length() != 6 || fx < 0 || fx >= HOME_FX_COUNT)) err = "Invalid home theme.";
+    if (!err && (speed < 1 || speed > 5)) speed = 3;
+    if (!err && (bright < 0 || bright > 2)) bright = 1;
+    if (!err && (activeCustom < -1 || activeCustom >= MAX_CUSTOM_MODES)) activeCustom = -1;
 
     if (err) {
         wipe(pin); wipe(duress); wipe(pw);
@@ -426,9 +603,11 @@ void WebPortal::handleSave() {
     }
 
     // ── Apply ──
-    if (pin.length() && !PinVault::setPin(pin.c_str())) err = "The PIN could not be saved.";
-    if (!err && duress.length() && !PinVault::setDuressPin(duress.c_str())) err = "The duress PIN must differ from the PIN.";
-    if (!err && !duress.length() && clearDuress) PinVault::setDuressPin("");
+    // PIN and duress PIN change together: same length, never equal, all or nothing
+    const char* newDuress = duress.length() ? duress.c_str() : (clearDuress ? "" : nullptr);
+    if ((pin.length() || newDuress) && !PinVault::setPins(pin.length() ? pin.c_str() : nullptr, newDuress)) {
+        err = PinVault::lastError()[0] ? PinVault::lastError() : "The PIN could not be saved.";
+    }
     wipe(pin); wipe(duress);
     if (err) {
         wipe(pw);
@@ -438,6 +617,15 @@ void WebPortal::handleSave() {
     if (pw.length()) storeSetupPassword(pw);
     wipe(pw);
 
+    if (policySpecified) {
+        if (EmergencyPolicyStore::save(newPol)) {
+            _policyChanged = true;
+        } else {
+            sendError(500, "Failed to save emergency policy.");
+            return;
+        }
+    }
+
     for (int i = 0; i < CryptoCoinRegistry::getCoinCount(); i++) {
         CoinAsset* c = CryptoCoinRegistry::getCoinByIndex(i);
         CryptoCoinRegistry::setCoinEnabled(i, coins.indexOf(String(",") + c->symbol + ",") >= 0);
@@ -445,8 +633,54 @@ void WebPortal::handleSave() {
     CryptoCoinRegistry::savePreferences();
 
     uint32_t v = strtoul(rgb.c_str(), nullptr, 16);
-    homeTheme.r = v >> 16; homeTheme.g = v >> 8; homeTheme.b = v;
+    homeTheme.r = (v >> 16) & 0xFF;
+    homeTheme.g = (v >> 8) & 0xFF;
+    homeTheme.b = v & 0xFF;
     homeTheme.fx = (HomeEffect)fx;
+    homeTheme.speed = (uint8_t)speed;
+    homeTheme.brightness = (LedBrightness)bright;
+    homeTheme.activeCustomMode = (int8_t)activeCustom;
+    strncpy(homeTheme.keyName, validatedName, sizeof(homeTheme.keyName) - 1);
+    homeTheme.keyName[sizeof(homeTheme.keyName) - 1] = '\0';
+    homeTheme.wallpaper = (HomeWallpaper)wp;
+
+    if (_server->hasArg("cm_count")) {
+        int cmCount = _server->arg("cm_count").toInt();
+        if (cmCount < 0) cmCount = 0;
+        if (cmCount > MAX_CUSTOM_MODES) cmCount = MAX_CUSTOM_MODES;
+        homeTheme.customCount = cmCount;
+        for (int i = 0; i < cmCount; i++) {
+            String prefix = "cm_" + String(i) + "_";
+            String cname = _server->arg(prefix + "name");
+            int cfx = _server->arg(prefix + "fx").toInt();
+            int cspd = _server->arg(prefix + "speed").toInt();
+            String ccolors = _server->arg(prefix + "colors");
+
+            memset(homeTheme.customModes[i].name, 0, sizeof(homeTheme.customModes[i].name));
+            strncpy(homeTheme.customModes[i].name, cname.c_str(), sizeof(homeTheme.customModes[i].name) - 1);
+            homeTheme.customModes[i].fx = (cfx >= 0 && cfx < HOME_FX_COUNT) ? (HomeEffect)cfx : HOME_FX_BREATHE;
+            homeTheme.customModes[i].speed = (cspd >= 1 && cspd <= 5) ? cspd : 3;
+
+            uint8_t colorIdx = 0;
+            int start = 0;
+            while (start < (int)ccolors.length() && colorIdx < 4) {
+                int comma = ccolors.indexOf(',', start);
+                String chex = (comma >= 0) ? ccolors.substring(start, comma) : ccolors.substring(start);
+                chex.trim();
+                if (chex.length() == 6) {
+                    uint32_t cv = strtoul(chex.c_str(), nullptr, 16);
+                    homeTheme.customModes[i].colors[colorIdx][0] = (cv >> 16) & 0xFF;
+                    homeTheme.customModes[i].colors[colorIdx][1] = (cv >> 8) & 0xFF;
+                    homeTheme.customModes[i].colors[colorIdx][2] = cv & 0xFF;
+                    colorIdx++;
+                }
+                if (comma < 0) break;
+                start = comma + 1;
+            }
+            homeTheme.customModes[i].colorCount = (colorIdx > 0) ? colorIdx : 1;
+        }
+    }
+    homeTheme.clearPreview();
     homeTheme.save();
 
     if (_wifi) {
@@ -467,5 +701,366 @@ void WebPortal::handleSave() {
 
     _setupDone = true;
     Serial.printf("[PORTAL] Settings saved: %d coin(s), theme #%06lx fx %d\n", selected, (unsigned long)v, fx);
+    sendJson(200, "{\"ok\":true}");
+}
+
+void WebPortal::handleSdBackup() {
+    if (!isAuthenticated() || !checkCsrf()) {
+        sendError(403, "Session expired. Reload the page.");
+        return;
+    }
+
+    if (!sdVault.isMounted() && !sdVault.begin()) {
+        sendError(400, "No microSD card detected.");
+        return;
+    }
+
+    if (!_wallet || !_wallet->hasSeed()) {
+        sendError(400, "No wallet seed to back up.");
+        return;
+    }
+
+    String pin = _server->arg("pin");
+    String pass = _server->arg("passphrase");
+    String pass2 = _server->arg("passphrase_confirm");
+
+    if (pass != pass2) {
+        wipe(pin); wipe(pass); wipe(pass2);
+        sendError(400, "Passphrases do not match.");
+        return;
+    }
+
+    bool validAscii = pass.length() >= SD_VAULT_MIN_PASSPHRASE_LEN && pass.length() <= 128;
+    for (size_t i = 0; i < pass.length(); i++) {
+        if (pass[i] < 32 || pass[i] > 126) { validAscii = false; break; }
+    }
+    if (!validAscii) {
+        wipe(pin); wipe(pass); wipe(pass2);
+        sendError(400, "Passphrase must be at least 12 printable characters.");
+        return;
+    }
+
+    PinVault::Result pRes = PinVault::check(pin.c_str());
+    wipe(pin);
+
+    if (pRes == PinVault::DURESS) {
+        wipe(pass); wipe(pass2);
+        _emergencyRequested = true;
+        _emergencyTrigger = TRIG_DURESS_PIN;
+        sendError(401, "Wrong PIN.");
+        return;
+    }
+    if (pRes == PinVault::LOCKED_OUT) {
+        wipe(pass); wipe(pass2);
+        _emergencyRequested = true;
+        _emergencyTrigger = TRIG_PIN_LOCKOUT;
+        sendError(401, "Device locked out.");
+        return;
+    }
+    if (pRes != PinVault::OK) {
+        wipe(pass); wipe(pass2);
+        sendError(401, "Wrong PIN.");
+        return;
+    }
+
+    PortalCpuBoost boost;
+    if (!_wallet->unlock()) {
+        wipe(pass); wipe(pass2);
+        sendError(500, "Failed to access wallet seed.");
+        return;
+    }
+
+    const char* mnemonic = _wallet->getMnemonicPhrase();
+    bool ok = false;
+    if (mnemonic && strlen(mnemonic) > 0) {
+        ok = sdVault.backupSeedV2(mnemonic, pass.c_str());
+    }
+    _wallet->lock();
+    wipe(pass); wipe(pass2);
+
+    if (!ok) {
+        sendError(500, "Failed to write encrypted backup to SD card.");
+        return;
+    }
+
+    sendJson(200, "{\"ok\":true}");
+}
+
+void WebPortal::handleSdRestore() {
+    if (!isAuthenticated() || !checkCsrf()) {
+        sendError(403, "Session expired. Reload the page.");
+        return;
+    }
+
+    if (!sdVault.isMounted() && !sdVault.begin()) {
+        sendError(400, "No microSD card detected.");
+        return;
+    }
+
+    if (!sdVault.hasSeedBackup()) {
+        sendError(400, "No backup file found on microSD card.");
+        return;
+    }
+
+    if (_wallet && _wallet->hasSeed()) {
+        String replaceArg = _server->arg("replace");
+        if (replaceArg != "1") {
+            sendError(400, "Replacement confirmation required.");
+            return;
+        }
+
+        String pin = _server->arg("pin");
+        PinVault::Result pRes = PinVault::check(pin.c_str());
+        wipe(pin);
+
+        if (pRes == PinVault::DURESS) {
+            _emergencyRequested = true;
+            _emergencyTrigger = TRIG_DURESS_PIN;
+            sendError(401, "Wrong PIN.");
+            return;
+        }
+        if (pRes == PinVault::LOCKED_OUT) {
+            _emergencyRequested = true;
+            _emergencyTrigger = TRIG_PIN_LOCKOUT;
+            sendError(401, "Device locked out.");
+            return;
+        }
+        if (pRes != PinVault::OK) {
+            sendError(401, "Wrong PIN.");
+            return;
+        }
+    }
+
+    String pass = _server->arg("passphrase");
+    if (pass.length() == 0) {
+        wipe(pass);
+        sendError(400, "Passphrase is required.");
+        return;
+    }
+
+    PortalCpuBoost boost;
+    char mnemonicBuf[256];
+    memset(mnemonicBuf, 0, sizeof(mnemonicBuf));
+    bool restored = sdVault.restoreSeed(mnemonicBuf, sizeof(mnemonicBuf), pass.c_str());
+    wipe(pass);
+
+    if (!restored) {
+        mbedtls_platform_zeroize(mnemonicBuf, sizeof(mnemonicBuf));
+        sendError(400, "Failed to decrypt backup. Incorrect passphrase or corrupted backup.");
+        return;
+    }
+
+    if (!CryptoWallet::isValidMnemonic(mnemonicBuf)) {
+        mbedtls_platform_zeroize(mnemonicBuf, sizeof(mnemonicBuf));
+        sendError(500, "Decrypted seed is not a valid BIP-39 mnemonic.");
+        return;
+    }
+
+    bool installed = false;
+    if (_wallet) {
+        installed = _wallet->setMnemonic(mnemonicBuf);
+    }
+    mbedtls_platform_zeroize(mnemonicBuf, sizeof(mnemonicBuf));
+
+    if (!installed) {
+        sendError(500, "Failed to save restored wallet.");
+        return;
+    }
+
+    sendJson(200, "{\"ok\":true}");
+}
+
+static void secureWipeFile(const char* path) {
+    if (!SD_MMC.exists(path)) return;
+    File f = SD_MMC.open(path, "r+");
+    if (f) {
+        size_t sz = f.size();
+        if (sz > 0) {
+            uint8_t buf[128];
+            // Pass 1: Cryptographic random bytes
+            f.seek(0);
+            size_t rem = sz;
+            while (rem > 0) {
+                size_t chunk = rem < sizeof(buf) ? rem : sizeof(buf);
+                CryptoP256::secureRandom(buf, chunk);
+                if (f.write(buf, chunk) != chunk) break;
+                rem -= chunk;
+            }
+            f.flush();
+            // Pass 2: Overwrite with zeros
+            f.seek(0);
+            memset(buf, 0, sizeof(buf));
+            rem = sz;
+            while (rem > 0) {
+                size_t chunk = rem < sizeof(buf) ? rem : sizeof(buf);
+                if (f.write(buf, chunk) != chunk) break;
+                rem -= chunk;
+            }
+            f.flush();
+        }
+        f.close();
+    }
+    SD_MMC.remove(path);
+}
+
+static void wipePsbtDir(const char* dirPath) {
+    File dir = (dirPath && dirPath[0]) ? SD_MMC.open(dirPath) : SD_MMC.open("/");
+    if (!dir || !dir.isDirectory()) return;
+    File file = dir.openNextFile();
+    while (file) {
+        const char* name = file.name();
+        bool isDir = file.isDirectory();
+        String fullPath;
+        if (name && name[0] == '/') {
+            fullPath = name;
+        } else if (dirPath && dirPath[0]) {
+            fullPath = String(dirPath) + "/" + (name ? name : "");
+        } else {
+            fullPath = "/" + String(name ? name : "");
+        }
+        file.close();
+        if (!isDir && (fullPath.endsWith(".psbt") || fullPath.endsWith(".PSBT"))) {
+            secureWipeFile(fullPath.c_str());
+        }
+        file = dir.openNextFile();
+    }
+    dir.close();
+}
+
+void WebPortal::handleSdFullBackup() {
+    if (!isAuthenticated() || !checkCsrf()) {
+        sendError(403, "Session expired. Reload the page.");
+        return;
+    }
+
+    if (!sdVault.isMounted() && !sdVault.begin()) {
+        sendError(400, "No microSD card detected.");
+        return;
+    }
+
+    if (!hasSetupPassword()) {
+        sendError(400, "Set a setup password before creating a full backup.");
+        return;
+    }
+
+    String pass = _server->arg("setup_pass");
+    if (pass.length() == 0 || pass.length() > 128) {
+        wipe(pass);
+        sendError(400, "Current setup password required.");
+        return;
+    }
+
+    if (!verifySetupPassword(pass)) {
+        wipe(pass);
+        sendError(401, "Wrong setup password.");
+        return;
+    }
+
+    PortalCpuBoost boost;
+    bool ok = sdVault.backupFull(pass.c_str());
+    wipe(pass);
+
+    if (!ok) {
+        sendError(500, "Failed to write full backup to SD card.");
+        return;
+    }
+
+    sendJson(200, "{\"ok\":true}");
+}
+
+void WebPortal::handleSdFullRestore() {
+    if (!isAuthenticated() || !checkCsrf()) {
+        sendError(403, "Session expired. Reload the page.");
+        return;
+    }
+
+    if (!sdVault.isMounted() && !sdVault.begin()) {
+        sendError(400, "No microSD card detected.");
+        return;
+    }
+
+    if (!sdVault.hasFullBackup()) {
+        sendError(400, "No full backup found on microSD card (/vault/full.tkb).");
+        return;
+    }
+
+    String pass = _server->arg("setup_pass");
+    if (pass.length() == 0 || pass.length() > 128) {
+        wipe(pass);
+        sendError(400, "Backup setup password required.");
+        return;
+    }
+
+    PortalCpuBoost boost;
+    bool ok = sdVault.restoreFull(pass.c_str());
+    wipe(pass);
+
+    if (!ok) {
+        sendError(400, "Failed to restore backup. Incorrect setup password or corrupted file.");
+        return;
+    }
+
+    _rebootRequested = true;
+    sendJson(200, "{\"ok\":true,\"rebooting\":true}");
+}
+
+void WebPortal::handleSdErase() {
+    if (!isAuthenticated() || !checkCsrf()) {
+        sendError(403, "Session expired. Reload the page.");
+        return;
+    }
+
+    if (!sdVault.isMounted() && !sdVault.begin()) {
+        sendError(400, "No microSD card detected.");
+        return;
+    }
+
+    String confirm = _server->arg("confirm");
+    if (confirm != "ERASE") {
+        sendError(400, "Type ERASE in uppercase to confirm.");
+        return;
+    }
+
+    // Pass 1: wipe standard seed and passkey files via engine
+    sdVault.wipeVault();
+
+    // Pass 2: overwrite and delete full backup & temp files in /vault
+    const char* extraFiles[] = {
+        SD_VAULT_FULL_FILE,
+        "/vault/full.tkb.tmp",
+        "/vault/full.tkb.old",
+        SD_VAULT_TMP_FILE,
+        SD_VAULT_OLD_FILE
+    };
+    for (size_t i = 0; i < sizeof(extraFiles) / sizeof(extraFiles[0]); i++) {
+        secureWipeFile(extraFiles[i]);
+    }
+
+    // Pass 3: sweep any remaining files in /vault
+    File vdir = SD_MMC.open(SD_VAULT_DIR);
+    if (vdir && vdir.isDirectory()) {
+        File f = vdir.openNextFile();
+        while (f) {
+            const char* name = f.name();
+            bool isDir = f.isDirectory();
+            String path;
+            if (name && name[0] == '/') {
+                path = name;
+            } else {
+                path = String(SD_VAULT_DIR) + "/" + (name ? name : "");
+            }
+            f.close();
+            if (!isDir) {
+                secureWipeFile(path.c_str());
+            }
+            f = vdir.openNextFile();
+        }
+        vdir.close();
+    }
+
+    // Pass 4: scan and wipe all .psbt files in /psbt and root /
+    wipePsbtDir("/psbt");
+    wipePsbtDir("");
+
     sendJson(200, "{\"ok\":true}");
 }

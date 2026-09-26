@@ -52,6 +52,14 @@ void WifiManager::saveToNvs() {
         _prefs.putString(keySsid, _networks[i].ssid);
         _prefs.putString(keyPass, _networks[i].pass);
     }
+    // Remove any orphaned keys from previously saved networks
+    for (int i = _savedCount; i < MAX_WIFI_NETWORKS; i++) {
+        char keySsid[16], keyPass[16];
+        snprintf(keySsid, sizeof(keySsid), "s_%d", i);
+        snprintf(keyPass, sizeof(keyPass), "p_%d", i);
+        _prefs.remove(keySsid);
+        _prefs.remove(keyPass);
+    }
     _prefs.end();
 }
 
@@ -115,6 +123,9 @@ void WifiManager::radioOff() {
 
 void WifiManager::startScan() {
     WiFi.mode(WIFI_STA);
+    if (!WiFi.STA.started()) {
+        WiFi.STA.begin(false);
+    }
     WiFi.setTxPower(WIFI_POWER_8_5dBm);   // low TX power: less heat in the enclosed dongle
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
     WiFi.scanNetworks(true, false, false, 300);  // async
@@ -132,6 +143,7 @@ void WifiManager::connectNextCandidate() {
     const WifiCreds& n = _networks[_candidates[_candIdx++]];
     Serial.printf("[WIFI] Joining '%s'...\n", n.ssid);
     WiFi.begin(n.ssid, n.pass);
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
     _phase = PHASE_CONNECTING;
     _phaseStart = millis();
 }

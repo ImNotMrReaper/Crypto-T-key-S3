@@ -54,20 +54,26 @@ bool FidoStore::save(const ResidentCred& cred) {
         if (_slots[i].magic != FIDO_RK_MAGIC) target = i;
     }
     if (target < 0) return false;
+    ResidentCred previous = _slots[target];
     _slots[target] = cred;
     _slots[target].magic = FIDO_RK_MAGIC;
-    return persist(target);
+    if (persist(target)) return true;
+    _slots[target] = previous;
+    return false;
 }
 
 uint8_t FidoStore::findByRp(const uint8_t* rpIdHash, uint8_t* slotsOut, uint8_t maxOut) const {
     uint8_t n = 0;
-    for (uint8_t i = 0; i < FIDO_RK_SLOTS && n < maxOut; i++) {
+    for (uint8_t i = 0; i < FIDO_RK_SLOTS; i++) {
         if (_slots[i].magic == FIDO_RK_MAGIC && memcmp(_slots[i].rpIdHash, rpIdHash, 32) == 0) {
-            // insertion sort, newest (highest counter) first
-            uint8_t j = n++;
-            while (j > 0 && _slots[slotsOut[j - 1]].created < _slots[i].created) {
-                slotsOut[j] = slotsOut[j - 1];
-                j--;
+            if (maxOut == 0 || !slotsOut) continue;
+            // Keep the bounded result sorted by newest (highest counter) first.
+            uint8_t j = 0;
+            while (j < n && _slots[slotsOut[j]].created >= _slots[i].created) j++;
+            if (n < maxOut) n++;
+            else if (j >= maxOut) continue;
+            for (uint8_t k = (uint8_t)(n - 1); k > j; k--) {
+                slotsOut[k] = slotsOut[k - 1];
             }
             slotsOut[j] = i;
         }

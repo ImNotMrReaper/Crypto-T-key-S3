@@ -1,10 +1,23 @@
-/**
- * duress_wipe.cpp — Implementation of Duress Flash Scrub
- */
-
 #include "duress_wipe.h"
+#include "sd_vault.h"
 #include <esp_partition.h>
 #include <nvs_flash.h>
+
+void (*DuressWipe::_ramScrubber)() = nullptr;
+bool DuressWipe::_sdWipeEnabled = false;
+static bool s_isWiped = false;
+
+void DuressWipe::setRamScrubber(void (*fn)()) {
+    _ramScrubber = fn;
+}
+
+void DuressWipe::setSdWipe(bool enabled) {
+    _sdWipeEnabled = enabled;
+}
+
+bool DuressWipe::isWiped() {
+    return s_isWiped;
+}
 
 void DuressWipe::zeroizeMemoryAndNVS() {
     // 1. Wipe Preferences / NVS Keystores
@@ -44,6 +57,18 @@ void DuressWipe::renderDecoyPanicScreen(TFT_eSPI& tft) {
 }
 
 void DuressWipe::execute(TFT_eSPI& tft, RgbStatus& rgb, const char* reason) {
+    (void)reason;
+
+    // 1. Scrub volatile secrets in RAM first if hook is set
+    if (_ramScrubber) {
+        _ramScrubber();
+    }
+
+    // 2. Wipe SD vault if enabled (disabled by default)
+    if (_sdWipeEnabled) {
+        sdVault.wipeVault();
+    }
+
     // Rapid red strobe
     rgb.setMode(LED_MODE_STROBE_RED);
     for (int i = 0; i < 8; i++) {
@@ -53,8 +78,9 @@ void DuressWipe::execute(TFT_eSPI& tft, RgbStatus& rgb, const char* reason) {
     rgb.setMode(LED_MODE_OFF);
     rgb.update();
 
-    // Zeroize everything
+    // 3. Zeroize Preferences / NVS Keystores
     zeroizeMemoryAndNVS();
+    s_isWiped = true;
 
     // Show decoy crash screen
     renderDecoyPanicScreen(tft);

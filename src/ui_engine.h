@@ -9,7 +9,10 @@
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
+#include "ui_theme.h"   // HomeTheme and HomeWallpaper are used in this header
 #include "config.h"
+
+class TFT_eSprite;
 
 class UiEngine {
 public:
@@ -36,10 +39,26 @@ public:
     void renderEntropyGatherScreen(int currentSamples, int requiredSamples);
     void renderAirGapScreen(const char* psbtFile, const char* summary, bool readyToSign);
     void renderAirGapPsbt(const char* fileName, const char* recipient, const char* amountBtc, const char* feeStr, bool readyToSign);
+    // PSBT approval: one page per external output (the FULL address, up to 3 lines) ...
+    void renderPsbtOutput(int page, int pages, const char* address, const char* amount);
+    // ... then a summary page; signing is offered only there
+    void renderPsbtSummary(const char* sending, const char* change, const char* fee, int foreignInputs);
     void renderOobeWizard(uint8_t step, const char* title, const char* detail, const char* hint);
     void renderSuccessBanner(const char* title, const char* subtitle);
     void renderErrorBanner(const char* message);
     void setRotation(uint8_t rot);
+
+    // Helpers for Home Screen rendering and testing
+    static void formatPrice(float price, char* out, size_t maxLen) {
+        HomeTheme::formatPrice(price, out, maxLen);
+    }
+    static void formatDate(const struct tm* t, char* out, size_t maxLen) {
+        HomeTheme::formatDate(t, out, maxLen);
+    }
+    static int getTickerCoinIndex(uint32_t nowMs, int enabledCoinsCount) {
+        return HomeTheme::getTickerCoinIndex(nowMs, enabledCoinsCount);
+    }
+    void drawWallpaper(HomeWallpaper wp, uint16_t accent);
 
 private:
     TFT_eSPI*   _tft = nullptr;
@@ -47,6 +66,8 @@ private:
 
     void drawHeader(const char* title, uint16_t headerColor = COLOR_HEADER_BG, uint16_t textColor = COLOR_NEON_CYAN);
     void drawFooter(const char* hint, uint16_t barColor = 0, float progress0to1 = 0.0f);
+    bool checkSprite();
+    void renderAllocError();
     static void truncateAddress(const char* addr, char* outBuf, size_t maxLen);
     static void formatRpDomain(const char* rpId, char* outBuf, size_t maxLen);
 };

@@ -25,6 +25,8 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 
+#include "emergency_policy.h"
+
 class CryptoWallet;
 class WifiManager;
 
@@ -36,9 +38,22 @@ public:
     bool isRunning() const { return _isRunning; }
     bool isSetupDone() const { return _setupDone; }     // settings saved and applied
     bool isExitRequested() const { return _exitRequested; }
+    // New firmware was just flashed: setup has to be saved once before the key can be used
+    void setSetupRequired(bool required) { _setupRequired = required; }
+    bool policyChanged() const { return _policyChanged; }
+    void clearPolicyChanged() { _policyChanged = false; }
+    bool emergencyRequested() const { return _emergencyRequested; }
+    EmergencyTrigger emergencyTrigger() const { return _emergencyTrigger; }
+    void clearEmergency() { _emergencyRequested = false; }
+    bool rebootRequested() const { return _rebootRequested; }
+    void clearRebootRequested() { _rebootRequested = false; }
 
     const char* apSsid() const { return _apSsid; }
     const char* apPass() const { return _apPass; }
+#ifdef TKEY_TEST_SERIAL_TOUCH
+    // Test builds only: a ready-made session so hardware tests can drive the real portal
+    void testSession(const char** session, const char** csrf);
+#endif
     const char* wifiQr() const { return _wifiQr; }
 
     static bool hasSetupPassword();
@@ -50,6 +65,12 @@ private:
     void handleSave();
     void handleScan();
     void handleExit();
+    void handleThemePreview();
+    void handleSdBackup();
+    void handleSdRestore();
+    void handleSdFullBackup();
+    void handleSdFullRestore();
+    void handleSdErase();
     void handleNotFound();
 
     bool isAuthenticated();
@@ -66,6 +87,7 @@ private:
     bool _isRunning = false;
     bool _setupDone = false;
     bool _exitRequested = false;
+    bool _setupRequired = false;
     bool _isProvisioned = false;
 
     char _apSsid[16] = "";
@@ -79,4 +101,9 @@ private:
     uint8_t  _loginFails = 0;
     uint32_t _lockUntilMs = 0;
     uint32_t _lockMinutes = 5;
+
+    bool             _policyChanged = false;
+    bool             _emergencyRequested = false;
+    EmergencyTrigger _emergencyTrigger = TRIG_DURESS_PIN;
+    bool             _rebootRequested = false;
 };
